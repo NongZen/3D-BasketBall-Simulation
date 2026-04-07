@@ -7,8 +7,9 @@ const GRAVITY = 9.8;
 const BACKBOARD_Z = -13.3;
 const HOOP_CENTER = new THREE.Vector3(0, 3.05, -12.85); 
 
+// ปรับค่าแรงเสียดทานและเด้งกลับของแป้นให้สมมาตรกัน (0.75) เพื่อให้องศาการชิ่งไม่เบี้ยว
 const BACKBOARD_COR_Z = 0.75; 
-const BACKBOARD_COR_XY = 0.90; 
+const BACKBOARD_COR_XY = 0.75; 
 const RIM_COR = 0.6; 
 const FLOOR_COR = 0.65; 
 
@@ -38,8 +39,6 @@ export default function App() {
 
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [scrubPercent, setScrubPercent] = useState<number>(0);
-  
-  // สถานะการเปิด/ปิดเมนูตั้งค่า
   const [isUIVisible, setIsUIVisible] = useState<boolean>(true);
   
   const [scorePopup, setScorePopup] = useState<{show: boolean, text: string, id: number}>({show: false, text: '', id: 0});
@@ -73,7 +72,6 @@ export default function App() {
     if (!containerRef.current) return;
     containerRef.current.innerHTML = '';
 
-    // --- Scene Setup ---
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x2a2a35);
     scene.fog = new THREE.Fog(0x2a2a35, 20, 100);
@@ -94,7 +92,6 @@ export default function App() {
     controls.dampingFactor = 0.05;
     controls.update();
 
-    // --- Lights ---
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -103,7 +100,6 @@ export default function App() {
     dirLight.target.position.set(0, 0, -7);
     scene.add(dirLight.target);
 
-    // --- Environment Objects ---
     const floorGeo = new THREE.PlaneGeometry(15, 14);
     const floorMat = new THREE.MeshStandardMaterial({ color: 0xdaaa70, roughness: 0.8, metalness: 0.1 }); 
     const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -483,6 +479,7 @@ export default function App() {
     };
   }, []);
 
+  // --- Auto Aim แก้บั๊ก 150N ใช้ AI Binary Search ที่สมบูรณ์แบบ ---
   const calculateAutoAim = (mode: 'swish' | 'bank') => {
     const target = mode === 'bank' ? VIRTUAL_HOOP_CENTER : HOOP_CENTER;
     
@@ -516,6 +513,7 @@ export default function App() {
 
     const dy = HOOP_CENTER.y - startY;
     
+    // แจ้งเตือนมุมตาย
     const minAngleDeg = Math.atan2(dy, dh) * 180 / Math.PI;
     if (angle <= minAngleDeg + 1) {
       alert(`❌ มุมการยิง ${angle}° ต่ำเกินไป! ไม่มีทางถึงห่วงได้จากระยะนี้\n(กรุณาปรับองศาขึ้นเป็น ${Math.ceil(minAngleDeg) + 5}° ขึ้นไปครับ)`);
@@ -523,64 +521,67 @@ export default function App() {
     }
 
     const angleRad = angle * Math.PI / 180;
-    let finalForce = force;
+    
+    let minF = 1;
+    let maxF = 150;
+    let bestF = force;
 
-    if (mode === 'swish') {
-       const tanTheta = Math.tan(angleRad);
-       const cosTheta = Math.cos(angleRad);
-       const denom = dh * tanTheta - dy;
-       const v0_sq = (0.5 * GRAVITY * dh * dh) / (cosTheta * cosTheta * denom);
-       finalForce = (Math.sqrt(v0_sq) * BALL_MASS) / PUSH_TIME;
-    } 
-    else {
-       let minF = 1;
-       let maxF = 150;
-       for (let i = 0; i < 50; i++) {
-          let testF = (minF + maxF) / 2;
-          let v0 = (testF * PUSH_TIME) / BALL_MASS;
-          let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
-          let pos = new THREE.Vector3(startX, startY, startZ);
-          let simDt = 0.005;
+    // ระบบ AI จำลองหาน้ำหนักที่แม่นยำที่สุด ป้องกันบั๊กลิมิต 150N
+    for (let i = 0; i < 50; i++) {
+        let testF = (minF + maxF) / 2;
+        let v0 = (testF * PUSH_TIME) / BALL_MASS;
+        let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
+        let pos = new THREE.Vector3(startX, startY, startZ);
+        let simDt = 0.005;
 
-          let traveledDist = 0;
-          let reachedHeight = false;
-          let exactDist = 0;
+        let traveledDist = 0;
+        let reachedHeight = false;
+        let exactDist = 0;
+        let timedOut = false;
 
-          for (let step = 0; step < 600; step++) {
-              vel.y -= GRAVITY * simDt;
-              let nextPos = pos.clone().addScaledVector(vel, simDt);
+        // ขยายขอบเขตการคำนวณเป็น 3000 เฟรม (15 วินาทีล่วงหน้า) เพื่อกันไม่ให้ AI เอ๋อเวลากำหนดแรงสูงๆ
+        for (let step = 0; step < 3000; step++) {
+            vel.y -= GRAVITY * simDt;
+            let nextPos = pos.clone().addScaledVector(vel, simDt);
 
-              if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
-                   nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
-                   vel.z *= -BACKBOARD_COR_Z;
-                   vel.x *= BACKBOARD_COR_XY;
-                   vel.y *= BACKBOARD_COR_XY;
-              }
+            if (mode === 'bank' && vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
+                 nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
+                 vel.z *= -BACKBOARD_COR_Z;
+                 vel.x *= BACKBOARD_COR_XY;
+                 vel.y *= BACKBOARD_COR_XY;
+            }
 
-              let stepDist = Math.sqrt(Math.pow(nextPos.x - pos.x, 2) + Math.pow(nextPos.z - pos.z, 2));
-              traveledDist += stepDist;
+            let stepDist = Math.sqrt(Math.pow(nextPos.x - pos.x, 2) + Math.pow(nextPos.z - pos.z, 2));
+            traveledDist += stepDist;
 
-              if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
-                  let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
-                  exactDist = traveledDist - stepDist + (stepDist * fraction);
-                  reachedHeight = true;
-                  break;
-              }
-              if (nextPos.y < 0) break;
-              pos.copy(nextPos);
-          }
+            if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
+                let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
+                exactDist = traveledDist - stepDist + (stepDist * fraction);
+                reachedHeight = true;
+                break;
+            }
+            if (nextPos.y < 0) {
+                break; 
+            }
+            pos.copy(nextPos);
+            
+            if (step === 2999) {
+                timedOut = true;
+            }
+        }
 
-          if (!reachedHeight) {
-              minF = testF; 
-          } else {
-              if (exactDist < dh) minF = testF; 
-              else maxF = testF; 
-          }
-          finalForce = testF;
-       }
+        if (timedOut) {
+            maxF = testF; // ถ้าเวลาผ่านไปนานมากแต่ลูกยังไม่ลง แสดงว่าแรงเยอะไป
+        } else if (!reachedHeight) {
+            minF = testF; // ถ้าลูกตกลงพื้นก่อนถึงระยะห่วง แสดงว่าแรงเบาไป
+        } else {
+            if (exactDist < dh) minF = testF; // ทะลุห่วงเร็วไป ต้องเพิ่มแรง
+            else maxF = testF; // ทะลุห่วงเลยเป้าหมาย ต้องลดแรง
+        }
+        bestF = testF;
     }
 
-    setForce(parseFloat(finalForce.toFixed(2)));
+    setForce(parseFloat(bestF.toFixed(2)));
     setAimMode(mode);
     setScrubPercent(0); 
   };
@@ -635,7 +636,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ปุ่มเปิด-ปิดหน้าต่างตั้งค่า (Toggle Button) */}
+      {/* ปุ่มเปิด-ปิดหน้าต่างตั้งค่า */}
       <button
         onClick={() => setIsUIVisible(!isUIVisible)}
         className="absolute top-4 right-4 z-[60] bg-gray-900/90 hover:bg-gray-700 backdrop-blur-md border border-gray-600 text-white rounded-full w-12 h-12 flex items-center justify-center shadow-2xl transition-all cursor-pointer text-xl"
@@ -644,7 +645,7 @@ export default function App() {
         {isUIVisible ? '✖️' : '⚙️'}
       </button>
 
-      {/* เมนูตั้งค่า (พร้อมแอนิเมชันเลื่อนเข้าออก) */}
+      {/* เมนูตั้งค่า */}
       <div className={`ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-50 max-h-[calc(100vh-2rem)] overflow-y-auto transition-all duration-300 ease-in-out ${isUIVisible ? 'translate-x-0 opacity-100' : '-translate-x-[120%] opacity-0 pointer-events-none'}`}>
         <h1 className="text-xl font-bold mb-3 text-blue-400">3D Hoops Sim</h1>
         
