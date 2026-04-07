@@ -3,14 +3,17 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 // --- Physics & Court Constants ---
-const GRAVITY = 9.8; // m/s^2
+const GRAVITY = 9.80665; // m/s^2
 const BACKBOARD_Z = -13.3;
 const HOOP_CENTER = new THREE.Vector3(0, 3.05, -12.85); 
-// Virtual hoop is mirrored across the backboard for bank shot calculations
+
+// สำหรับ Auto-Aim Bank Shot เรากำหนดให้การสะท้อนแป้นสมบูรณ์ 100% เพื่อให้คณิตศาสตร์แก้สมการได้แม่นยำ
 const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z));
 
 const BALL_MASS = 0.624; // kg
 const PUSH_TIME = 0.2; // seconds
+const BALL_RADIUS = 0.12;
+const TUBE_RADIUS = 0.01; // ความหนาของเหล็กห่วง
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -18,11 +21,11 @@ export default function App() {
   // --- UI & Simulation State ---
   const [startX, setStartX] = useState<number>(0);
   const [startZ, setStartZ] = useState<number>(-2);
-  const [startY, setStartY] = useState<number>(1.5); // Release Height
+  const [startY, setStartY] = useState<number>(1.5);
   
-  const [yawAngle, setYawAngle] = useState<number>(0); // องศาซ้ายขวา (0 = เล็งตรงไปที่กลางห่วง)
-  const [angle, setAngle] = useState<number>(50);      // องศาเงย (Pitch)
-  const [force, setForce] = useState<number>(35);      // แรงยิง (Newtons)
+  const [yawAngle, setYawAngle] = useState<number>(0);
+  const [angle, setAngle] = useState<number>(50);
+  const [force, setForce] = useState<number>(35);
   
   const [isDashed, setIsDashed] = useState<boolean>(true);
   const [isShooting, setIsShooting] = useState<boolean>(false);
@@ -31,7 +34,8 @@ export default function App() {
 
   const stateRef = useRef({
     startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode,
-    ballT: 0, hitBackboard: false, tHit: -1,
+    ballT: 0, 
+    trajectoryPoints: [] as THREE.Vector3[],
   });
 
   useEffect(() => {
@@ -40,8 +44,6 @@ export default function App() {
 
   useEffect(() => {
     if (!containerRef.current) return;
-
-    // ล้าง Canvas เก่า
     containerRef.current.innerHTML = '';
 
     // --- Scene Setup ---
@@ -103,7 +105,6 @@ export default function App() {
     const boundaryLine = new THREE.Line(boundaryGeo, lineMat);
     courtGroup.add(boundaryLine);
 
-    // 1. พื้นที่ทาสีแดง (Paint Area / Key)
     const paintGeo = new THREE.PlaneGeometry(4.9, 5.8);
     const paintMat = new THREE.MeshStandardMaterial({ color: 0x993333, roughness: 0.8 });
     const paint = new THREE.Mesh(paintGeo, paintMat);
@@ -111,17 +112,6 @@ export default function App() {
     paint.position.set(0, 0, BACKBOARD_Z + 5.8 / 2);
     courtGroup.add(paint);
 
-    const paintBorderGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-2.45, 0.01, -14),
-      new THREE.Vector3(2.45, 0.01, -14),
-      new THREE.Vector3(2.45, 0.01, BACKBOARD_Z + 5.8),
-      new THREE.Vector3(-2.45, 0.01, BACKBOARD_Z + 5.8),
-      new THREE.Vector3(-2.45, 0.01, -14),
-    ]);
-    const paintBorder = new THREE.Line(paintBorderGeo, lineMat);
-    courtGroup.add(paintBorder);
-
-    // 2. เส้นยิงลูกโทษ (Free throw line)
     const ftLineGeo = new THREE.PlaneGeometry(4.9, 0.08);
     const ftLineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const ftLine = new THREE.Mesh(ftLineGeo, ftLineMat);
@@ -129,29 +119,12 @@ export default function App() {
     ftLine.position.set(0, 0.015, BACKBOARD_Z + 5.8);
     courtGroup.add(ftLine);
 
-    // วงกลมจุดโทษ (Free Throw Circle)
     const ftCircleGeo = new THREE.RingGeometry(1.8, 1.88, 64);
     const ftCircleMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
     const ftCircle = new THREE.Mesh(ftCircleGeo, ftCircleMat);
     ftCircle.rotation.x = -Math.PI / 2;
     ftCircle.position.set(0, 0.015, BACKBOARD_Z + 5.8);
     courtGroup.add(ftCircle);
-
-    // 3. เส้นยืนตำแหน่งตอนยิงลูกโทษ (Hash Marks)
-    const markerPositions = [-11.8, -10.9, -10.0, -9.1];
-    markerPositions.forEach(z => {
-      const leftMarkGeo = new THREE.PlaneGeometry(0.2, 0.05);
-      const leftMark = new THREE.Mesh(leftMarkGeo, ftLineMat);
-      leftMark.rotation.x = -Math.PI / 2;
-      leftMark.position.set(-2.55, 0.01, z);
-      courtGroup.add(leftMark);
-      
-      const rightMarkGeo = new THREE.PlaneGeometry(0.2, 0.05);
-      const rightMark = new THREE.Mesh(rightMarkGeo, ftLineMat);
-      rightMark.rotation.x = -Math.PI / 2;
-      rightMark.position.set(2.55, 0.01, z);
-      courtGroup.add(rightMark);
-    });
 
     const threePtGeo = new THREE.RingGeometry(6.75, 6.85, 64, 1, Math.PI, Math.PI);
     const threePtMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -172,38 +145,25 @@ export default function App() {
     board.position.set(0, 3.55, BACKBOARD_Z);
     scene.add(board);
 
-    // 4. เส้นกล่องขาวบนแป้น (Inner White Box)
-    const innerBoxMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 4 });
-    const innerBoxGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-0.3, 3.05, BACKBOARD_Z + 0.03),
-      new THREE.Vector3(0.3, 3.05, BACKBOARD_Z + 0.03),
-      new THREE.Vector3(0.3, 3.5, BACKBOARD_Z + 0.03),
-      new THREE.Vector3(-0.3, 3.5, BACKBOARD_Z + 0.03),
-      new THREE.Vector3(-0.3, 3.05, BACKBOARD_Z + 0.03),
-    ]);
-    const innerBox = new THREE.Line(innerBoxGeo, innerBoxMat);
-    scene.add(innerBox);
-
-    const rimGeo = new THREE.TorusGeometry(0.22, 0.02, 16, 32);
+    const rimGeo = new THREE.TorusGeometry(0.22, TUBE_RADIUS, 16, 32);
     const rimMat = new THREE.MeshStandardMaterial({ color: 0xff4400, roughness: 0.5 });
     const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.rotation.x = -Math.PI / 2;
     rim.position.copy(HOOP_CENTER);
     scene.add(rim);
 
-    // สร้างคนยิง
     const shooterGeo = new THREE.CylinderGeometry(0.3, 0.3, 1);
     const shooterMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6 });
     const shooter = new THREE.Mesh(shooterGeo, shooterMat);
     scene.add(shooter);
 
-    const ballGeo = new THREE.SphereGeometry(0.12, 32, 32);
+    const ballGeo = new THREE.SphereGeometry(BALL_RADIUS, 32, 32);
     const ballMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.6 });
     const ball = new THREE.Mesh(ballGeo, ballMat);
     scene.add(ball);
 
-    // --- Trajectory Line ---
-    const maxPoints = 200;
+    // --- Trajectory Line (อัปเกรดให้รองรับจุดจำนวนมาก) ---
+    const maxPoints = 2000;
     const trajGeo = new THREE.BufferGeometry();
     const positions = new Float32Array(maxPoints * 3);
     trajGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -219,7 +179,6 @@ export default function App() {
     marker.visible = false;
     scene.add(marker);
 
-    // --- Raycaster (Interaction) ---
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -230,7 +189,6 @@ export default function App() {
 
       mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
       mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObject(floor);
 
@@ -248,66 +206,100 @@ export default function App() {
       const dzHoop = HOOP_CENTER.z - sz;
       const baseYaw = Math.atan2(dxHoop, dzHoop); 
       const finalYawRad = baseYaw + (yawDeg * Math.PI / 180);
-      
       return { dirX: Math.sin(finalYawRad), dirZ: Math.cos(finalYawRad) };
     };
 
-    // --- Animation Loop ---
-    let animationFrameId: number;
-    let lastTime = 0;
-
-    const updateTrajectory = () => {
+    // --- PHYSICS ENGINE: อัปเดตวิถีโค้งและการชนแบบทีละก้าว ---
+    const updateTrajectoryPhysics = () => {
       const { angle, force, startX, startZ, startY, yawAngle, isDashed } = stateRef.current;
       
       const { dirX, dirZ } = getShootingDirection(startX, startZ, yawAngle);
-      const angleRad = angle * Math.PI / 180;
       const v0 = (force * PUSH_TIME) / BALL_MASS;
       
-      const v0_y = v0 * Math.sin(angleRad);
-      const v0_h = v0 * Math.cos(angleRad);
-      const v0_x = v0_h * dirX;
-      const v0_z = v0_h * dirZ;
+      let pos = new THREE.Vector3(startX, startY, startZ);
+      let vel = new THREE.Vector3(
+        (v0 * Math.cos(angle * Math.PI / 180)) * dirX,
+        v0 * Math.sin(angle * Math.PI / 180),
+        (v0 * Math.cos(angle * Math.PI / 180)) * dirZ
+      );
       
-      let hitBackboard = false;
-      let tHit = -1;
-      let ptCount = 0;
-      
-      for (let i = 0; i < maxPoints; i++) {
-        const t = i * 0.02; 
-        let x = startX + v0_x * t;
-        const y = startY + v0_y * t - 0.5 * GRAVITY * t * t;
-        let z = startZ + v0_z * t;
-        
-        if (y < 0) break; 
-        
-        if (!hitBackboard && v0_z < 0 && z <= BACKBOARD_Z && startZ > BACKBOARD_Z) {
-          const tInt = (BACKBOARD_Z - startZ) / v0_z;
-          const yInt = startY + v0_y * tInt - 0.5 * GRAVITY * tInt * tInt;
-          const xInt = startX + v0_x * tInt;
-          if (Math.abs(xInt) <= 0.9 && Math.abs(yInt - 3.55) <= 0.525) {
-            hitBackboard = true;
-            tHit = tInt;
-            marker.position.set(xInt, yInt, BACKBOARD_Z + 0.03); 
+      const simDt = 0.005; // คำนวณความละเอียดสูง
+      const maxSteps = 2000;
+      const generatedPoints = [pos.clone()];
+      let hitMarker = false;
+
+      for (let i = 0; i < maxSteps; i++) {
+        vel.y -= GRAVITY * simDt;
+        let nextPos = pos.clone().addScaledVector(vel, simDt);
+
+        // 1. ชนแป้นบาส (Backboard)
+        if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
+          if (nextPos.x >= -0.9 && nextPos.x <= 0.9 && nextPos.y >= 3.025 && nextPos.y <= 4.075) {
+            nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z);
+            vel.z *= -1.0; // เด้ง 100% เพื่อให้ Auto-aim แม่นยำ
+            if (!hitMarker) {
+              marker.position.set(nextPos.x, nextPos.y, BACKBOARD_Z + 0.03);
+              hitMarker = true;
+            }
           }
         }
-        
-        if (hitBackboard && t > tHit) z = BACKBOARD_Z + (BACKBOARD_Z - z);
-        
-        positions[ptCount * 3] = x;
-        positions[ptCount * 3 + 1] = y;
-        positions[ptCount * 3 + 2] = z;
-        ptCount++;
+
+        // 2. ชนขอบห่วงเหล็ก (Rim Collision)
+        if (nextPos.y > 2.8 && nextPos.y < 3.3) {
+          let dx = nextPos.x - HOOP_CENTER.x;
+          let dz = nextPos.z - HOOP_CENTER.z;
+          let horizDist = Math.sqrt(dx*dx + dz*dz);
+          
+          if (horizDist > 0.001) {
+            // หาจุดที่ใกล้ที่สุดบนวงแหวนห่วง
+            let rx = HOOP_CENTER.x + (dx/horizDist) * 0.22;
+            let rz = HOOP_CENTER.z + (dz/horizDist) * 0.22;
+            let closestRingPoint = new THREE.Vector3(rx, HOOP_CENTER.y, rz);
+            
+            let dist = nextPos.distanceTo(closestRingPoint);
+            // ถ้าระยะห่างน้อยกว่า (รัศมีลูก + รัศมีท่อเหล็ก) แปลว่าชน!
+            if (dist < BALL_RADIUS + TUBE_RADIUS) {
+              let normal = new THREE.Vector3().subVectors(nextPos, closestRingPoint).normalize();
+              let dot = vel.dot(normal);
+              if (dot < 0) {
+                vel.sub(normal.multiplyScalar(1.6 * dot)); // 1.6 = Restitution(0.6) + 1
+                nextPos.copy(closestRingPoint).add(normal.multiplyScalar(BALL_RADIUS + TUBE_RADIUS + 0.001));
+              }
+            }
+          }
+        }
+
+        // 3. กระทบพื้น (Floor) -> วาดให้จมพื้นพอดีแล้วหยุด
+        if (nextPos.y <= BALL_RADIUS) {
+          let fraction = (pos.y - BALL_RADIUS) / (pos.y - nextPos.y);
+          nextPos.lerpVectors(pos, nextPos, fraction);
+          pos.copy(nextPos);
+          if (i % 3 === 0 || i === maxSteps - 1) generatedPoints.push(pos.clone());
+          break; // หยุดลูปเมื่อถึงพื้น
+        }
+
+        pos.copy(nextPos);
+        // บันทึกจุดวาดเส้นประทุกๆ 3 steps (ประหยัด memory)
+        if (i % 3 === 0) generatedPoints.push(pos.clone());
       }
-      
-      trajGeo.setDrawRange(0, ptCount);
+
+      stateRef.current.trajectoryPoints = generatedPoints;
+      marker.visible = hitMarker;
+
+      // อัปเดต BufferGeometry เส้นประ
+      for (let i = 0; i < generatedPoints.length && i < maxPoints; i++) {
+        positions[i * 3] = generatedPoints[i].x;
+        positions[i * 3 + 1] = generatedPoints[i].y;
+        positions[i * 3 + 2] = generatedPoints[i].z;
+      }
+      trajGeo.setDrawRange(0, generatedPoints.length);
       trajGeo.attributes.position.needsUpdate = true;
       trajectoryLine.material = isDashed ? dashedLineMat : solidLineMat;
       if (isDashed) trajectoryLine.computeLineDistances();
-      
-      marker.visible = hitBackboard;
-      stateRef.current.hitBackboard = hitBackboard;
-      stateRef.current.tHit = tHit;
     };
+
+    let animationFrameId: number;
+    let lastTime = 0;
 
     const animate = (time: number) => {
       animationFrameId = requestAnimationFrame(animate);
@@ -316,38 +308,35 @@ export default function App() {
       lastTime = time;
 
       controls.enabled = stateRef.current.interactionMode === 'camera';
-      
       shooter.scale.set(1, stateRef.current.startY, 1);
       shooter.position.set(stateRef.current.startX, stateRef.current.startY / 2, stateRef.current.startZ);
 
       if (stateRef.current.isShooting) {
-        stateRef.current.ballT += dt * 1.2; 
-        const t = stateRef.current.ballT;
-        const { angle, force, startX, startZ, startY, yawAngle } = stateRef.current;
+        stateRef.current.ballT += dt * 1.5; // ความเร็วอนิเมชันตอนยิง
+        const pts = stateRef.current.trajectoryPoints;
+        const simDt = 0.005 * 3; // เวลาต่อ 1 จุดที่บันทึกไว้ในอาร์เรย์ (0.015)
         
-        const { dirX, dirZ } = getShootingDirection(startX, startZ, yawAngle);
-        
-        const v0 = (force * PUSH_TIME) / BALL_MASS;
-        const v0_y = v0 * Math.sin(angle * Math.PI / 180);
-        const v0_h = v0 * Math.cos(angle * Math.PI / 180);
-        
-        let x = startX + (v0_h * dirX) * t;
-        const y = startY + v0_y * t - 0.5 * GRAVITY * t * t;
-        let z = startZ + (v0_h * dirZ) * t;
-
-        if (stateRef.current.hitBackboard && t > stateRef.current.tHit) {
-          z = BACKBOARD_Z + (BACKBOARD_Z - z);
-        }
-
-        ball.position.set(x, y, z);
-        if (y < 0.12) {
-          ball.position.y = 0.12;
+        if (pts.length > 0) {
+          const indexExact = stateRef.current.ballT / simDt;
+          const indexFloor = Math.floor(indexExact);
+          
+          if (indexFloor >= pts.length - 1) {
+            ball.position.copy(pts[pts.length - 1]);
+            setIsShooting(false);
+          } else {
+            // เลื่อนลูกบอลไปตามจุดที่จำลองไว้แล้วล่วงหน้า ทำให้ชนแป้น/ขอบห่วงเป๊ะตามเส้นประ!
+            const p1 = pts[indexFloor];
+            const p2 = pts[indexFloor + 1];
+            const fraction = indexExact - indexFloor;
+            ball.position.lerpVectors(p1, p2, fraction);
+          }
+        } else {
           setIsShooting(false);
         }
       } else {
         ball.position.set(stateRef.current.startX, stateRef.current.startY, stateRef.current.startZ);
         stateRef.current.ballT = 0;
-        updateTrajectory();
+        updateTrajectoryPhysics();
       }
 
       controls.update();
@@ -417,7 +406,6 @@ export default function App() {
         className={interactionMode === 'shooter' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'} 
       />
 
-      {/* อัปเดต UI Overlay: ปรับขนาดความสูงและเผื่อขอบด้านล่างให้ Scroll ได้สุด */}
       <div className="ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-10 max-h-[calc(100vh-2rem)] overflow-y-auto">
         <h1 className="text-xl font-bold mb-3 text-blue-400">3D Hoops Sim</h1>
         
