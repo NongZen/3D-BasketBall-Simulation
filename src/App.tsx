@@ -103,12 +103,50 @@ export default function App() {
     const boundaryLine = new THREE.Line(boundaryGeo, lineMat);
     courtGroup.add(boundaryLine);
 
+    // 1. พื้นที่ทาสีแดง (Paint Area / Key)
     const paintGeo = new THREE.PlaneGeometry(4.9, 5.8);
     const paintMat = new THREE.MeshStandardMaterial({ color: 0x993333, roughness: 0.8 });
     const paint = new THREE.Mesh(paintGeo, paintMat);
     paint.rotation.x = -Math.PI / 2;
     paint.position.set(0, 0, BACKBOARD_Z + 5.8 / 2);
     courtGroup.add(paint);
+
+    // เพิ่มเส้นขอบสีขาวล้อมรอบพื้นที่ Paint Area ให้ชัดเจน
+    const paintBorderGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-2.45, 0.01, -14),
+      new THREE.Vector3(2.45, 0.01, -14),
+      new THREE.Vector3(2.45, 0.01, BACKBOARD_Z + 5.8),
+      new THREE.Vector3(-2.45, 0.01, BACKBOARD_Z + 5.8),
+      new THREE.Vector3(-2.45, 0.01, -14),
+    ]);
+    const paintBorder = new THREE.Line(paintBorderGeo, lineMat);
+    courtGroup.add(paintBorder);
+
+    // 2. เส้นยิงลูกโทษ (Free throw line - ให้หนาและเด่นขึ้น)
+    const ftLineGeo = new THREE.PlaneGeometry(4.9, 0.08);
+    const ftLineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const ftLine = new THREE.Mesh(ftLineGeo, ftLineMat);
+    ftLine.rotation.x = -Math.PI/2;
+    ftLine.position.set(0, 0.015, BACKBOARD_Z + 5.8);
+    courtGroup.add(ftLine);
+
+    // 3. เส้นยืนตำแหน่งตอนยิงลูกโทษ (Hash Marks / Lane Spaces)
+    const markerPositions = [-11.8, -10.9, -10.0, -9.1]; // ระยะห่างช่องยืนรีบาวด์
+    markerPositions.forEach(z => {
+      // ฝั่งซ้าย
+      const leftMarkGeo = new THREE.PlaneGeometry(0.2, 0.05);
+      const leftMark = new THREE.Mesh(leftMarkGeo, ftLineMat);
+      leftMark.rotation.x = -Math.PI / 2;
+      leftMark.position.set(-2.55, 0.01, z);
+      courtGroup.add(leftMark);
+      
+      // ฝั่งขวา
+      const rightMarkGeo = new THREE.PlaneGeometry(0.2, 0.05);
+      const rightMark = new THREE.Mesh(rightMarkGeo, ftLineMat);
+      rightMark.rotation.x = -Math.PI / 2;
+      rightMark.position.set(2.55, 0.01, z);
+      courtGroup.add(rightMark);
+    });
 
     const threePtGeo = new THREE.RingGeometry(6.75, 6.85, 64, 1, Math.PI, Math.PI);
     const threePtMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
@@ -129,6 +167,18 @@ export default function App() {
     board.position.set(0, 3.55, BACKBOARD_Z);
     scene.add(board);
 
+    // 4. เส้นกล่องขาวบนแป้น (Inner White Box)
+    const innerBoxMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 4 });
+    const innerBoxGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-0.3, 3.05, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(0.3, 3.05, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(0.3, 3.5, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(-0.3, 3.5, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(-0.3, 3.05, BACKBOARD_Z + 0.03),
+    ]);
+    const innerBox = new THREE.Line(innerBoxGeo, innerBoxMat);
+    scene.add(innerBox);
+
     const rimGeo = new THREE.TorusGeometry(0.22, 0.02, 16, 32);
     const rimMat = new THREE.MeshStandardMaterial({ color: 0xff4400, roughness: 0.5 });
     const rim = new THREE.Mesh(rimGeo, rimMat);
@@ -136,7 +186,7 @@ export default function App() {
     rim.position.copy(HOOP_CENTER);
     scene.add(rim);
 
-    // สร้างคนยิงด้วยความสูง 1 unit (จะถูก scale ตาม startY ทีหลัง)
+    // สร้างคนยิง
     const shooterGeo = new THREE.CylinderGeometry(0.3, 0.3, 1);
     const shooterMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6 });
     const shooter = new THREE.Mesh(shooterGeo, shooterMat);
@@ -188,20 +238,13 @@ export default function App() {
     };
     window.addEventListener('pointerdown', onPointerDown);
 
-    // --- Helper Function: Get Direction Vector ---
     const getShootingDirection = (sx: number, sz: number, yawDeg: number) => {
-      // หามุมพื้นฐานที่ชี้ตรงไปที่ห่วง
       const dxHoop = HOOP_CENTER.x - sx;
       const dzHoop = HOOP_CENTER.z - sz;
       const baseYaw = Math.atan2(dxHoop, dzHoop); 
-      
-      // นำองศาที่ผู้ใช้ปรับ (yawDeg) มาบวกเข้าไป
       const finalYawRad = baseYaw + (yawDeg * Math.PI / 180);
       
-      return {
-        dirX: Math.sin(finalYawRad),
-        dirZ: Math.cos(finalYawRad)
-      };
+      return { dirX: Math.sin(finalYawRad), dirZ: Math.cos(finalYawRad) };
     };
 
     // --- Animation Loop ---
@@ -269,7 +312,6 @@ export default function App() {
 
       controls.enabled = stateRef.current.interactionMode === 'camera';
       
-      // อัปเดตขนาดและตำแหน่งคนยิงตามความสูง startY
       shooter.scale.set(1, stateRef.current.startY, 1);
       shooter.position.set(stateRef.current.startX, stateRef.current.startY / 2, stateRef.current.startZ);
 
@@ -324,26 +366,21 @@ export default function App() {
     };
   }, []);
 
-  // --- Logic คำนวณ Auto-Aim แบบรวมองศาซ้าย-ขวา ---
   const calculateAutoAim = (target: THREE.Vector3, mode: 'swish' | 'bank') => {
-    // 1. คำนวณหามุมซ้ายขวา (Yaw) ที่ต้องใช้
     const dxHoop = HOOP_CENTER.x - startX;
     const dzHoop = HOOP_CENTER.z - startZ;
-    const baseYaw = Math.atan2(dxHoop, dzHoop); // องศาที่ชี้ไปหาห่วงปกติ
+    const baseYaw = Math.atan2(dxHoop, dzHoop);
 
     const dxTarget = target.x - startX;
     const dzTarget = target.z - startZ;
-    const targetYaw = Math.atan2(dxTarget, dzTarget); // องศาที่ชี้ไปหาเป้าหมาย (อาจเป็นห่วงหรือเป้าชิ่ง)
+    const targetYaw = Math.atan2(dxTarget, dzTarget);
 
     let requiredYawOffset = (targetYaw - baseYaw) * (180 / Math.PI);
-    
-    // จัดการ Normalize ให้ค่าองศาอยู่ในช่วง -180 ถึง 180
     if (requiredYawOffset > 180) requiredYawOffset -= 360;
     if (requiredYawOffset < -180) requiredYawOffset += 360;
     
     setYawAngle(parseFloat(requiredYawOffset.toFixed(2)));
 
-    // 2. คำนวณหาแรง (Force) ที่ต้องใช้เพื่อยิงให้ถึงเป้าหมาย
     const dh = Math.sqrt(dxTarget * dxTarget + dzTarget * dzTarget);
     const dy = target.y - startY;
     
@@ -363,6 +400,9 @@ export default function App() {
     setForce(parseFloat(requiredForce.toFixed(2)));
     setAimMode(mode);
   };
+
+  // 5. คำนวณระยะห่างแนวนอน (บนพื้น) จากใต้ห่วงมาที่คนยิง
+  const distanceToHoop = Math.sqrt(Math.pow(startX - HOOP_CENTER.x, 2) + Math.pow(startZ - HOOP_CENTER.z, 2)).toFixed(2);
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', backgroundColor: '#111827', overflow: 'hidden' }} className="font-sans">
@@ -384,9 +424,17 @@ export default function App() {
         
         <div className="space-y-3">
           
-          {/* กล่อง: ตำแหน่งและความสูง */}
           <div className="space-y-2 bg-gray-800/50 p-3 rounded-lg border border-gray-700">
             <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">📍 ตำแหน่ง & ความสูง</div>
+            
+            {/* แสดงระยะห่างจากห่วง */}
+            <div className="mb-2 pb-2 border-b border-gray-700">
+              <div className="flex justify-between items-center">
+                <label className="text-xs text-yellow-500 font-bold">📏 ระยะห่างจากแป้นบนพื้น</label>
+                <span className="text-sm text-yellow-400 font-mono bg-gray-900 px-2 py-0.5 rounded">{distanceToHoop} m</span>
+              </div>
+            </div>
+
             <div>
               <div className="flex justify-between mb-1"><label className="text-xs text-gray-300">ตำแหน่ง X</label><span className="text-xs text-blue-300">{startX}m</span></div>
               <input type="range" min="-7.5" max="7.5" step="0.1" value={startX} onChange={(e) => { setStartX(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
@@ -401,7 +449,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* กล่อง: การเล็งและแรง */}
           <div className="space-y-2 bg-gray-800/50 p-3 rounded-lg border border-gray-700">
             <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">🎯 การเล็ง & แรง</div>
             <div>
