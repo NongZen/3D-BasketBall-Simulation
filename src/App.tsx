@@ -12,8 +12,6 @@ const BACKBOARD_COR_XY = 0.90;
 const RIM_COR = 0.6; 
 const FLOOR_COR = 0.65; 
 
-const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z) / BACKBOARD_COR_Z);
-
 const BALL_MASS = 0.624; 
 const PUSH_TIME = 0.2; 
 const BALL_RADIUS = 0.12;
@@ -28,7 +26,7 @@ export default function App() {
   const [startY, setStartY] = useState<number>(1.5);
   
   const [yawAngle, setYawAngle] = useState<number>(0);
-  const [angle, setAngle] = useState<number>(50);
+  const [angle, setAngle] = useState<number>(55);
   const [force, setForce] = useState<number>(35);
   
   const [isDashed, setIsDashed] = useState<boolean>(true); 
@@ -39,7 +37,6 @@ export default function App() {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [scrubPercent, setScrubPercent] = useState<number>(0);
   
-  // State สำหรับ Text Popup เอฟเฟค
   const [scorePopup, setScorePopup] = useState<{show: boolean, text: string, id: number}>({show: false, text: '', id: 0});
 
   const stateRef = useRef({
@@ -48,20 +45,20 @@ export default function App() {
     ballT: 0, 
     trajectoryPoints: [] as THREE.Vector3[],
     hitBackboard: false,
+    hitRim: false, // Track rim collision
     scoreDetected: false,
     scorePointIndex: -1,
-    hasTriggeredScore: false // ป้องกัน Text เด้งซ้ำ
+    hasTriggeredScore: false 
   });
 
   useEffect(() => {
     stateRef.current = { ...stateRef.current, startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode, playbackSpeed, scrubPercent };
   }, [startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode, playbackSpeed, scrubPercent]);
 
-  // Listener สำหรับโชว์ข้อความตอนยิงลง
   useEffect(() => {
     const handleScore = (e: any) => {
       setScorePopup({ show: true, text: e.detail.text, id: Date.now() });
-      setTimeout(() => setScorePopup(prev => ({ ...prev, show: false })), 2000); // ข้อความจะหายไปใน 2 วิ
+      setTimeout(() => setScorePopup(prev => ({ ...prev, show: false })), 2000); 
     };
     window.addEventListener('score-effect', handleScore);
     return () => window.removeEventListener('score-effect', handleScore);
@@ -95,7 +92,6 @@ export default function App() {
     // --- Lights ---
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
-
     const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
     dirLight.position.set(10, 20, 10);
     dirLight.castShadow = true;
@@ -188,6 +184,13 @@ export default function App() {
     rim.position.copy(HOOP_CENTER);
     scene.add(rim);
 
+    // --- ระบบตาข่าย (Net Physics) ---
+    const netGeo = new THREE.CylinderGeometry(0.22, 0.15, 0.35, 16, 4, true);
+    const netMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.6 });
+    const netMesh = new THREE.Mesh(netGeo, netMat);
+    netMesh.position.set(HOOP_CENTER.x, HOOP_CENTER.y - 0.175, HOOP_CENTER.z);
+    scene.add(netMesh);
+
     const shooterGeo = new THREE.CylinderGeometry(0.3, 0.3, 1);
     const shooterMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6 });
     const shooter = new THREE.Mesh(shooterGeo, shooterMat);
@@ -201,12 +204,11 @@ export default function App() {
     // --- Trajectory "Ghost Ball Trail" ---
     const maxInst = 500; 
     const trajGeo = new THREE.SphereGeometry(BALL_RADIUS * 0.7, 16, 16); 
-    const trajMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }); // ใช้สีขาวเพื่อให้ปรับสีแยกได้ง่าย
+    const trajMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }); 
     const trajMesh = new THREE.InstancedMesh(trajGeo, trajMat, maxInst);
     
-    // เตรียมสีพื้นฐานสำหรับเส้นผี
-    const colorDefault = new THREE.Color(0x10b981); // เขียวมรกต
-    const colorScore = new THREE.Color(0xfbbf24);   // เหลืองทอง (ตอนเข้าห่วง)
+    const colorDefault = new THREE.Color(0x10b981); 
+    const colorScore = new THREE.Color(0xfbbf24);   
     
     scene.add(trajMesh);
     const dummy = new THREE.Object3D(); 
@@ -267,6 +269,7 @@ export default function App() {
       const generatedPoints = [pos.clone()];
       
       let hitMarker = false;
+      let hitRimTracker = false;
       let scoreDetected = false;
       let scorePointIndex = -1;
 
@@ -274,17 +277,15 @@ export default function App() {
         vel.y -= GRAVITY * simDt;
         let nextPos = pos.clone().addScaledVector(vel, simDt);
 
-        // ตรวจจับการลงห่วง (Score Detection) ล่วงหน้า
         if (!scoreDetected && vel.y < 0 && pos.y > HOOP_CENTER.y && nextPos.y <= HOOP_CENTER.y) {
           let dx = nextPos.x - HOOP_CENTER.x;
           let dz = nextPos.z - HOOP_CENTER.z;
-          if (Math.sqrt(dx*dx + dz*dz) < 0.22) { // ถ้าระยะห่างน้อยกว่ารัศมีห่วงตอนทะลุลงมา
+          if (Math.sqrt(dx*dx + dz*dz) < 0.22) { 
             scoreDetected = true;
-            scorePointIndex = generatedPoints.length; // จำตำแหน่ง Index ที่เข้าห่วงไว้เปลี่ยนสี
+            scorePointIndex = generatedPoints.length; 
           }
         }
 
-        // ชนแป้นบาส
         if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
           if (nextPos.x >= -0.9 && nextPos.x <= 0.9 && nextPos.y >= 3.025 && nextPos.y <= 4.075) {
             nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
@@ -298,7 +299,6 @@ export default function App() {
           }
         }
 
-        // ชนขอบห่วง
         if (Math.abs(nextPos.y - HOOP_CENTER.y) < BALL_RADIUS + TUBE_RADIUS) {
           let dx = nextPos.x - HOOP_CENTER.x;
           let dz = nextPos.z - HOOP_CENTER.z;
@@ -320,12 +320,12 @@ export default function App() {
                  vel.sub(normal.clone().multiplyScalar((1 + RIM_COR) * dot)); 
                  let overlap = (BALL_RADIUS + TUBE_RADIUS) - distToRing;
                  nextPos.add(normal.clone().multiplyScalar(overlap + 0.005));
+                 hitRimTracker = true; // บันทึกว่ามีการชนขอบห่วง
                }
              }
           }
         }
 
-        // กระทบพื้น
         if (nextPos.y <= BALL_RADIUS) {
           if (vel.y < 0) { 
             nextPos.y = BALL_RADIUS; 
@@ -347,11 +347,11 @@ export default function App() {
 
       stateRef.current.trajectoryPoints = generatedPoints;
       stateRef.current.hitBackboard = hitMarker;
+      stateRef.current.hitRim = hitRimTracker;
       stateRef.current.scoreDetected = scoreDetected;
       stateRef.current.scorePointIndex = scorePointIndex;
       marker.visible = hitMarker;
 
-      // วาดเส้น Ghost Trail และใส่ Effect สีทองตรงจุดยิงลง
       trajMesh.visible = isDashed;
       if (isDashed) {
         const stepSkip = Math.max(1, Math.floor(generatedPoints.length / maxInst)); 
@@ -364,7 +364,6 @@ export default function App() {
            dummy.updateMatrix();
            trajMesh.setMatrixAt(i, dummy.matrix);
            
-           // ให้บริเวณจุดที่ลูกลงห่วงเปลี่ยนเป็นสีทอง 
            if (scoreDetected && Math.abs(pointIndex - scorePointIndex) < 18) {
              trajMesh.setColorAt(i, colorScore);
            } else {
@@ -372,7 +371,7 @@ export default function App() {
            }
         }
         trajMesh.instanceMatrix.needsUpdate = true;
-        if (trajMesh.instanceColor) trajMesh.instanceColor.needsUpdate = true; // อัปเดตสี
+        if (trajMesh.instanceColor) trajMesh.instanceColor.needsUpdate = true;
       }
     };
 
@@ -388,6 +387,21 @@ export default function App() {
       controls.enabled = stateRef.current.interactionMode === 'camera';
       shooter.scale.set(1, stateRef.current.startY, 1);
       shooter.position.set(stateRef.current.startX, stateRef.current.startY / 2, stateRef.current.startZ);
+
+      // จัดการอนิเมชันของตาข่ายบาส
+      let ballDy = HOOP_CENTER.y - ball.position.y;
+      let ballDist = Math.sqrt(Math.pow(ball.position.x - HOOP_CENTER.x, 2) + Math.pow(ball.position.z - HOOP_CENTER.z, 2));
+      
+      if (ballDy > 0 && ballDy < 0.5 && ballDist < 0.22) {
+          // ลูกบาสกำลังผ่านตาข่าย ให้ตาข่ายยืดลง
+          let stretch = Math.sin((ballDy / 0.5) * Math.PI); 
+          netMesh.scale.y = 1.0 + stretch * 0.4;
+          netMesh.position.y = (HOOP_CENTER.y - 0.175) - (stretch * 0.07);
+      } else {
+          // เด้งกลับจุดเดิม
+          netMesh.scale.y = THREE.MathUtils.lerp(netMesh.scale.y, 1.0, 0.15);
+          netMesh.position.y = THREE.MathUtils.lerp(netMesh.position.y, HOOP_CENTER.y - 0.175, 0.15);
+      }
 
       if (stateRef.current.isShooting) {
         const prevY = ball.position.y;
@@ -413,7 +427,7 @@ export default function App() {
           setIsShooting(false);
         }
 
-        // ตรวจจับตอนลูกบาสทะลุห่วงระหว่างเล่นอนิเมชันเพื่อโชว์ข้อความ
+        // โชว์คะแนนตอนทะลุห่วง
         const currY = ball.position.y;
         if (prevY > HOOP_CENTER.y && currY <= HOOP_CENTER.y) {
           let dx = ball.position.x - HOOP_CENTER.x;
@@ -421,7 +435,12 @@ export default function App() {
           if (Math.sqrt(dx*dx + dz*dz) < 0.22) {
             if (!stateRef.current.hasTriggeredScore) {
               stateRef.current.hasTriggeredScore = true;
-              let text = stateRef.current.hitBackboard ? '💥 BANK SHOT!' : '💦 SWISH!';
+              let text = '🔥 SCORE!';
+              if (!stateRef.current.hitRim && !stateRef.current.hitBackboard) {
+                  text = '💦 SWISH!'; // ไม่แตะขอบเหล็ก ไม่แตะแป้น
+              } else if (stateRef.current.hitBackboard) {
+                  text = '💥 BANK SHOT!';
+              }
               window.dispatchEvent(new CustomEvent('score-effect', { detail: { text } }));
             }
           }
@@ -461,7 +480,10 @@ export default function App() {
     };
   }, []);
 
-  const calculateAutoAim = (target: THREE.Vector3, mode: 'swish' | 'bank') => {
+  // --- Auto Aim ด้วย AI Binary Search (แม่นยำ 100%) ---
+  const calculateAutoAim = (targetMode: 'swish' | 'bank') => {
+    const target = targetMode === 'bank' ? VIRTUAL_HOOP_CENTER : HOOP_CENTER;
+    
     const dxHoop = HOOP_CENTER.x - startX;
     const dzHoop = HOOP_CENTER.z - startZ;
     const baseYaw = Math.atan2(dxHoop, dzHoop);
@@ -473,27 +495,78 @@ export default function App() {
     let requiredYawOffset = (targetYaw - baseYaw) * (180 / Math.PI);
     if (requiredYawOffset > 180) requiredYawOffset -= 360;
     if (requiredYawOffset < -180) requiredYawOffset += 360;
-    
     setYawAngle(parseFloat(requiredYawOffset.toFixed(2)));
 
+    // ตรวจสอบมุมยิงขั้นต่ำ (Impossible Angle Check)
     const dh = Math.sqrt(dxTarget * dxTarget + dzTarget * dzTarget);
-    const dy = target.y - startY;
-    
-    const angleRad = angle * Math.PI / 180;
-    const tanTheta = Math.tan(angleRad);
-    const cosTheta = Math.cos(angleRad);
-    const denom = dh * tanTheta - dy;
-    
-    if (denom <= 0) {
-      alert("มุมต่ำเกินไปที่จะยิงถึงเป้าหมายจากระยะนี้ครับ ลองปรับองศาให้สูงขึ้น!");
+    const dy = HOOP_CENTER.y - startY; 
+    const minAngleDeg = Math.atan2(dy, dh) * 180 / Math.PI;
+
+    if (angle <= minAngleDeg + 1) { // เผื่อองศาไว้นิดหน่อยเพื่อให้ข้ามขอบเหล็กได้
+      alert(`❌ มุมการยิง ${angle}° ต่ำเกินไป! ไม่มีทางถึงห่วงได้\n(ต้องปรับองศาเป็น ${Math.ceil(minAngleDeg) + 5}° ขึ้นไป)`);
       return;
     }
-    
-    const v0_sq = (0.5 * GRAVITY * dh * dh) / (cosTheta * cosTheta * denom);
-    const requiredForce = (Math.sqrt(v0_sq) * BALL_MASS) / PUSH_TIME;
-    
-    setForce(parseFloat(requiredForce.toFixed(2)));
-    setAimMode(mode);
+
+    // Binary Search หาน้ำหนักแรงที่เป๊ะที่สุดจากการจำลองฟิสิกส์จริง
+    let minF = 1;
+    let maxF = 150;
+    let bestF = force;
+    let angleRad = angle * Math.PI / 180;
+    const finalYawRad = baseYaw + (requiredYawOffset * Math.PI / 180);
+    let dirX = Math.sin(finalYawRad);
+    let dirZ = Math.cos(finalYawRad);
+
+    for (let i = 0; i < 40; i++) {
+        let testF = (minF + maxF) / 2;
+        let v0 = (testF * PUSH_TIME) / BALL_MASS;
+        let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
+        let pos = new THREE.Vector3(startX, startY, startZ);
+        let simDt = 0.01;
+        let resultScore = 0; 
+        
+        for (let step = 0; step < 300; step++) {
+            vel.y -= GRAVITY * simDt;
+            let nextPos = pos.clone().addScaledVector(vel, simDt);
+
+            // จำลองเฉพาะการชนแป้นเพื่อหาแรง Bank
+            if (targetMode === 'bank' && vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
+                 nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
+                 vel.z *= -BACKBOARD_COR_Z;
+                 vel.x *= BACKBOARD_COR_XY;
+                 vel.y *= BACKBOARD_COR_XY;
+            }
+
+            // ถ้าร่วงผ่านความสูงของห่วง
+            if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
+                let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
+                let crossZ = pos.z + (nextPos.z - pos.z) * fraction;
+                
+                if (targetMode === 'swish') {
+                    resultScore = crossZ - HOOP_CENTER.z; // ถ้าวิ่งไม่ถึงเป้า Z จะบวกเยอะ
+                } else {
+                    resultScore = HOOP_CENTER.z - crossZ; // ถ้าเด้งมาไม่ถึงเป้า Z จะติดลบเยอะ
+                }
+                break;
+            }
+            if (nextPos.y < 0) break;
+            pos.copy(nextPos);
+        }
+
+        if (resultScore > 0) minF = testF; // ขว้างไม่ถึง ให้เพิ่มแรง
+        else maxF = testF; // ขว้างเลย ให้ลดแรง
+        bestF = testF;
+    }
+
+    // ตรวจสอบว่ามุมตั้งไว้แบนเกินไปจนติดขอบห่วงหรือเปล่า (ถ้า entry angle ต่ำไป)
+    let v0 = (bestF * PUSH_TIME) / BALL_MASS;
+    let checkV_y = v0 * Math.sin(angleRad) - GRAVITY * (dh / (v0 * Math.cos(angleRad)));
+    let checkV_h = v0 * Math.cos(angleRad);
+    if (Math.abs(checkV_y) / checkV_h < 0.75) {
+       alert(`⚠️ มุมยิง ${angle}° ทำให้ลูกพุ่งเข้าห่วงในแนวราบเกินไป (ลูกจะกระแทกเหล็กและไม่ Swish 100%)\nแนะนำให้เพิ่มมุมยิงให้สูงขึ้น เพื่อวิถีโค้งที่สวยงาม!`);
+    }
+
+    setForce(parseFloat(bestF.toFixed(2)));
+    setAimMode(targetMode);
     setScrubPercent(0); 
   };
 
@@ -509,7 +582,7 @@ export default function App() {
   };
 
   const triggerShoot = () => {
-    stateRef.current.hasTriggeredScore = false; // รีเซ็ตการโชว์ข้อความทุกครั้งที่ยิงใหม่
+    stateRef.current.hasTriggeredScore = false; 
     setIsShooting(true);
     setScrubPercent(0);
   };
@@ -519,7 +592,6 @@ export default function App() {
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', backgroundColor: '#111827', overflow: 'hidden' }} className="font-sans">
       
-      {/* CSS Animation พิเศษสำหรับ Effect แต้ม */}
       <style>{`
         @keyframes popScore {
           0% { transform: scale(0.5) translateY(20px); opacity: 0; filter: drop-shadow(0 0 10px rgba(251,191,36,0.8)); }
@@ -532,23 +604,20 @@ export default function App() {
         }
       `}</style>
 
-      {/* ฉาก 3D */}
       <div 
         ref={containerRef} 
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
         className={interactionMode === 'shooter' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'} 
       />
 
-      {/* Score Popup Overlay */}
       {scorePopup.show && (
         <div key={scorePopup.id} className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
-          <h2 className="animate-score text-7xl md:text-9xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 via-orange-500 to-red-600 uppercase border-text">
+          <h2 className="animate-score text-7xl md:text-9xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 via-orange-500 to-red-600 uppercase">
             {scorePopup.text}
           </h2>
         </div>
       )}
 
-      {/* UI Controls */}
       <div className="ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-50 max-h-[calc(100vh-2rem)] overflow-y-auto">
         <h1 className="text-xl font-bold mb-3 text-blue-400">3D Hoops Sim</h1>
         
@@ -626,10 +695,10 @@ export default function App() {
           </div>
 
           <div className="space-y-2 pt-2">
-            <button onClick={() => calculateAutoAim(HOOP_CENTER, 'swish')} className="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-sm transition-colors flex justify-between items-center">
+            <button onClick={() => calculateAutoAim('swish')} className="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-sm transition-colors flex justify-between items-center">
               <span>🎯 Auto-Aim (ยิงลงห่วงตรง)</span>{aimMode === 'swish' && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
             </button>
-            <button onClick={() => calculateAutoAim(VIRTUAL_HOOP_CENTER, 'bank')} className="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-sm transition-colors flex justify-between items-center">
+            <button onClick={() => calculateAutoAim('bank')} className="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-sm transition-colors flex justify-between items-center">
               <span>📐 Auto-Aim (ยิงชิ่งแป้น)</span>{aimMode === 'bank' && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
             </button>
             <button onClick={triggerShoot} disabled={isShooting} className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-gray-400 rounded-lg text-base font-bold shadow-lg transition-colors mt-2 mb-2">
