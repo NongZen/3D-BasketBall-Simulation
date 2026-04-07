@@ -7,11 +7,9 @@ const GRAVITY = 9.8;
 const BACKBOARD_Z = -13.3;
 const HOOP_CENTER = new THREE.Vector3(0, 3.05, -12.85); 
 
-// ปรับค่าแรงเสียดทานและเด้งกลับของแป้นให้สมมาตรกัน (0.75) เพื่อให้องศาการชิ่งไม่เบี้ยว
 const BACKBOARD_COR_Z = 0.75; 
-const BACKBOARD_COR_XY = 0.75; 
+const BACKBOARD_COR_XY = 0.90; 
 const RIM_COR = 0.6; 
-const FLOOR_COR = 0.65; 
 
 const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z) / BACKBOARD_COR_Z);
 
@@ -202,7 +200,6 @@ export default function App() {
     const ball = new THREE.Mesh(ballGeo, ballMat);
     scene.add(ball);
 
-    // --- Trajectory "Ghost Ball Trail" ---
     const maxInst = 500; 
     const trajGeo = new THREE.SphereGeometry(BALL_RADIUS * 0.7, 16, 16); 
     const trajMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 }); 
@@ -327,19 +324,13 @@ export default function App() {
           }
         }
 
+        // กระทบพื้น - หยุดวิถีลูกบอลทันที
         if (nextPos.y <= BALL_RADIUS) {
-          if (vel.y < 0) { 
-            nextPos.y = BALL_RADIUS; 
-            vel.y = Math.abs(vel.y) * FLOOR_COR; 
-            vel.x *= 0.8; 
-            vel.z *= 0.8;
-            
-            if (vel.y < 0.3) {
-                pos.copy(nextPos);
-                generatedPoints.push(pos.clone());
-                break; 
-            }
-          }
+          let fraction = (pos.y - BALL_RADIUS) / (pos.y - nextPos.y);
+          nextPos.lerpVectors(pos, nextPos, fraction);
+          pos.copy(nextPos);
+          generatedPoints.push(pos.clone());
+          break; // จบการคำนวณทันที ลูกจะไม่เด้งต่อ
         }
 
         pos.copy(nextPos);
@@ -415,7 +406,7 @@ export default function App() {
           
           if (indexFloor >= pts.length - 1) {
             ball.position.copy(pts[pts.length - 1]);
-            setIsShooting(false);
+            setIsShooting(false); // อนิเมชันจบที่พื้นพอดี
           } else {
             const p1 = pts[indexFloor];
             const p2 = pts[indexFloor + 1];
@@ -426,7 +417,7 @@ export default function App() {
           setIsShooting(false);
         }
 
-        // โชว์คะแนนตอนทะลุห่วง (กฏ Clean Shot)
+        // โชว์คะแนนตอนทะลุห่วง
         const currY = ball.position.y;
         if (prevY > HOOP_CENTER.y && currY <= HOOP_CENTER.y) {
           let dx = ball.position.x - HOOP_CENTER.x;
@@ -479,7 +470,6 @@ export default function App() {
     };
   }, []);
 
-  // --- Auto Aim แก้บั๊ก 150N ใช้ AI Binary Search ที่สมบูรณ์แบบ ---
   const calculateAutoAim = (mode: 'swish' | 'bank') => {
     const target = mode === 'bank' ? VIRTUAL_HOOP_CENTER : HOOP_CENTER;
     
@@ -513,7 +503,6 @@ export default function App() {
 
     const dy = HOOP_CENTER.y - startY;
     
-    // แจ้งเตือนมุมตาย
     const minAngleDeg = Math.atan2(dy, dh) * 180 / Math.PI;
     if (angle <= minAngleDeg + 1) {
       alert(`❌ มุมการยิง ${angle}° ต่ำเกินไป! ไม่มีทางถึงห่วงได้จากระยะนี้\n(กรุณาปรับองศาขึ้นเป็น ${Math.ceil(minAngleDeg) + 5}° ขึ้นไปครับ)`);
@@ -521,67 +510,64 @@ export default function App() {
     }
 
     const angleRad = angle * Math.PI / 180;
-    
-    let minF = 1;
-    let maxF = 150;
-    let bestF = force;
+    let finalForce = force;
 
-    // ระบบ AI จำลองหาน้ำหนักที่แม่นยำที่สุด ป้องกันบั๊กลิมิต 150N
-    for (let i = 0; i < 50; i++) {
-        let testF = (minF + maxF) / 2;
-        let v0 = (testF * PUSH_TIME) / BALL_MASS;
-        let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
-        let pos = new THREE.Vector3(startX, startY, startZ);
-        let simDt = 0.005;
+    if (mode === 'swish') {
+       const tanTheta = Math.tan(angleRad);
+       const cosTheta = Math.cos(angleRad);
+       const denom = dh * tanTheta - dy;
+       const v0_sq = (0.5 * GRAVITY * dh * dh) / (cosTheta * cosTheta * denom);
+       finalForce = (Math.sqrt(v0_sq) * BALL_MASS) / PUSH_TIME;
+    } 
+    else {
+       let minF = 1;
+       let maxF = 150;
+       for (let i = 0; i < 50; i++) {
+          let testF = (minF + maxF) / 2;
+          let v0 = (testF * PUSH_TIME) / BALL_MASS;
+          let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
+          let pos = new THREE.Vector3(startX, startY, startZ);
+          let simDt = 0.005;
 
-        let traveledDist = 0;
-        let reachedHeight = false;
-        let exactDist = 0;
-        let timedOut = false;
+          let traveledDist = 0;
+          let reachedHeight = false;
+          let exactDist = 0;
 
-        // ขยายขอบเขตการคำนวณเป็น 3000 เฟรม (15 วินาทีล่วงหน้า) เพื่อกันไม่ให้ AI เอ๋อเวลากำหนดแรงสูงๆ
-        for (let step = 0; step < 3000; step++) {
-            vel.y -= GRAVITY * simDt;
-            let nextPos = pos.clone().addScaledVector(vel, simDt);
+          for (let step = 0; step < 3000; step++) {
+              vel.y -= GRAVITY * simDt;
+              let nextPos = pos.clone().addScaledVector(vel, simDt);
 
-            if (mode === 'bank' && vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
-                 nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
-                 vel.z *= -BACKBOARD_COR_Z;
-                 vel.x *= BACKBOARD_COR_XY;
-                 vel.y *= BACKBOARD_COR_XY;
-            }
+              if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
+                   nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
+                   vel.z *= -BACKBOARD_COR_Z;
+                   vel.x *= BACKBOARD_COR_XY;
+                   vel.y *= BACKBOARD_COR_XY;
+              }
 
-            let stepDist = Math.sqrt(Math.pow(nextPos.x - pos.x, 2) + Math.pow(nextPos.z - pos.z, 2));
-            traveledDist += stepDist;
+              let stepDist = Math.sqrt(Math.pow(nextPos.x - pos.x, 2) + Math.pow(nextPos.z - pos.z, 2));
+              traveledDist += stepDist;
 
-            if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
-                let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
-                exactDist = traveledDist - stepDist + (stepDist * fraction);
-                reachedHeight = true;
-                break;
-            }
-            if (nextPos.y < 0) {
-                break; 
-            }
-            pos.copy(nextPos);
-            
-            if (step === 2999) {
-                timedOut = true;
-            }
-        }
+              if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
+                  let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
+                  exactDist = traveledDist - stepDist + (stepDist * fraction);
+                  reachedHeight = true;
+                  break;
+              }
+              if (nextPos.y < BALL_RADIUS) break;
+              pos.copy(nextPos);
+          }
 
-        if (timedOut) {
-            maxF = testF; // ถ้าเวลาผ่านไปนานมากแต่ลูกยังไม่ลง แสดงว่าแรงเยอะไป
-        } else if (!reachedHeight) {
-            minF = testF; // ถ้าลูกตกลงพื้นก่อนถึงระยะห่วง แสดงว่าแรงเบาไป
-        } else {
-            if (exactDist < dh) minF = testF; // ทะลุห่วงเร็วไป ต้องเพิ่มแรง
-            else maxF = testF; // ทะลุห่วงเลยเป้าหมาย ต้องลดแรง
-        }
-        bestF = testF;
+          if (!reachedHeight) {
+              minF = testF; 
+          } else {
+              if (exactDist < dh) minF = testF; 
+              else maxF = testF; 
+          }
+          finalForce = testF;
+       }
     }
 
-    setForce(parseFloat(bestF.toFixed(2)));
+    setForce(parseFloat(finalForce.toFixed(2)));
     setAimMode(mode);
     setScrubPercent(0); 
   };
@@ -620,14 +606,12 @@ export default function App() {
         }
       `}</style>
 
-      {/* ฉาก 3D */}
       <div 
         ref={containerRef} 
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
         className={interactionMode === 'shooter' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'} 
       />
 
-      {/* Score Popup */}
       {scorePopup.show && (
         <div key={scorePopup.id} className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
           <h2 className="animate-score text-7xl md:text-9xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 via-orange-500 to-red-600 uppercase">
@@ -636,7 +620,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ปุ่มเปิด-ปิดหน้าต่างตั้งค่า */}
       <button
         onClick={() => setIsUIVisible(!isUIVisible)}
         className="absolute top-4 right-4 z-[60] bg-gray-900/90 hover:bg-gray-700 backdrop-blur-md border border-gray-600 text-white rounded-full w-12 h-12 flex items-center justify-center shadow-2xl transition-all cursor-pointer text-xl"
@@ -645,7 +628,6 @@ export default function App() {
         {isUIVisible ? '✖️' : '⚙️'}
       </button>
 
-      {/* เมนูตั้งค่า */}
       <div className={`ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-50 max-h-[calc(100vh-2rem)] overflow-y-auto transition-all duration-300 ease-in-out ${isUIVisible ? 'translate-x-0 opacity-100' : '-translate-x-[120%] opacity-0 pointer-events-none'}`}>
         <h1 className="text-xl font-bold mb-3 text-blue-400">3D Hoops Sim</h1>
         
