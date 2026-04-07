@@ -111,7 +111,6 @@ export default function App() {
     paint.position.set(0, 0, BACKBOARD_Z + 5.8 / 2);
     courtGroup.add(paint);
 
-    // เพิ่มเส้นขอบสีขาวล้อมรอบพื้นที่ Paint Area ให้ชัดเจน
     const paintBorderGeo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-2.45, 0.01, -14),
       new THREE.Vector3(2.45, 0.01, -14),
@@ -122,7 +121,7 @@ export default function App() {
     const paintBorder = new THREE.Line(paintBorderGeo, lineMat);
     courtGroup.add(paintBorder);
 
-    // 2. เส้นยิงลูกโทษ (Free throw line - ให้หนาและเด่นขึ้น)
+    // 2. เส้นยิงลูกโทษ (Free throw line)
     const ftLineGeo = new THREE.PlaneGeometry(4.9, 0.08);
     const ftLineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const ftLine = new THREE.Mesh(ftLineGeo, ftLineMat);
@@ -130,17 +129,23 @@ export default function App() {
     ftLine.position.set(0, 0.015, BACKBOARD_Z + 5.8);
     courtGroup.add(ftLine);
 
-    // 3. เส้นยืนตำแหน่งตอนยิงลูกโทษ (Hash Marks / Lane Spaces)
-    const markerPositions = [-11.8, -10.9, -10.0, -9.1]; // ระยะห่างช่องยืนรีบาวด์
+    // วงกลมจุดโทษ (Free Throw Circle)
+    const ftCircleGeo = new THREE.RingGeometry(1.8, 1.88, 64);
+    const ftCircleMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const ftCircle = new THREE.Mesh(ftCircleGeo, ftCircleMat);
+    ftCircle.rotation.x = -Math.PI / 2;
+    ftCircle.position.set(0, 0.015, BACKBOARD_Z + 5.8);
+    courtGroup.add(ftCircle);
+
+    // 3. เส้นยืนตำแหน่งตอนยิงลูกโทษ (Hash Marks)
+    const markerPositions = [-11.8, -10.9, -10.0, -9.1];
     markerPositions.forEach(z => {
-      // ฝั่งซ้าย
       const leftMarkGeo = new THREE.PlaneGeometry(0.2, 0.05);
       const leftMark = new THREE.Mesh(leftMarkGeo, ftLineMat);
       leftMark.rotation.x = -Math.PI / 2;
       leftMark.position.set(-2.55, 0.01, z);
       courtGroup.add(leftMark);
       
-      // ฝั่งขวา
       const rightMarkGeo = new THREE.PlaneGeometry(0.2, 0.05);
       const rightMark = new THREE.Mesh(rightMarkGeo, ftLineMat);
       rightMark.rotation.x = -Math.PI / 2;
@@ -401,7 +406,6 @@ export default function App() {
     setAimMode(mode);
   };
 
-  // 5. คำนวณระยะห่างแนวนอน (บนพื้น) จากใต้ห่วงมาที่คนยิง
   const distanceToHoop = Math.sqrt(Math.pow(startX - HOOP_CENTER.x, 2) + Math.pow(startZ - HOOP_CENTER.z, 2)).toFixed(2);
 
   return (
@@ -413,8 +417,8 @@ export default function App() {
         className={interactionMode === 'shooter' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'} 
       />
 
-      {/* UI Overlay */}
-      <div className="ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-10 max-h-[95vh] overflow-y-auto">
+      {/* อัปเดต UI Overlay: ปรับขนาดความสูงและเผื่อขอบด้านล่างให้ Scroll ได้สุด */}
+      <div className="ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-10 max-h-[calc(100vh-2rem)] overflow-y-auto">
         <h1 className="text-xl font-bold mb-3 text-blue-400">3D Hoops Sim</h1>
         
         <div className="flex bg-gray-800 p-1 rounded-lg mb-4 border border-gray-700">
@@ -427,7 +431,6 @@ export default function App() {
           <div className="space-y-2 bg-gray-800/50 p-3 rounded-lg border border-gray-700">
             <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">📍 ตำแหน่ง & ความสูง</div>
             
-            {/* แสดงระยะห่างจากห่วง */}
             <div className="mb-2 pb-2 border-b border-gray-700">
               <div className="flex justify-between items-center">
                 <label className="text-xs text-yellow-500 font-bold">📏 ระยะห่างจากแป้นบนพื้น</label>
@@ -480,7 +483,7 @@ export default function App() {
             <button onClick={() => calculateAutoAim(VIRTUAL_HOOP_CENTER, 'bank')} className="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-sm transition-colors flex justify-between items-center">
               <span>📐 Auto-Aim (ยิงชิ่งแป้น)</span>{aimMode === 'bank' && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
             </button>
-            <button onClick={() => setIsShooting(true)} disabled={isShooting} className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-gray-400 rounded-lg text-base font-bold shadow-lg transition-colors mt-2">
+            <button onClick={() => setIsShooting(true)} disabled={isShooting} className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-gray-400 rounded-lg text-base font-bold shadow-lg transition-colors mt-2 mb-2">
               {isShooting ? 'กำลังยิง...' : '🏀 ยิง (SHOOT)'}
             </button>
           </div>
