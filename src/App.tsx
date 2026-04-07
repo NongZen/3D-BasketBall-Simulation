@@ -39,6 +39,9 @@ export default function App() {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [scrubPercent, setScrubPercent] = useState<number>(0);
   
+  // สถานะการเปิด/ปิดเมนูตั้งค่า
+  const [isUIVisible, setIsUIVisible] = useState<boolean>(true);
+  
   const [scorePopup, setScorePopup] = useState<{show: boolean, text: string, id: number}>({show: false, text: '', id: 0});
 
   const stateRef = useRef({
@@ -322,7 +325,7 @@ export default function App() {
                  vel.sub(normal.clone().multiplyScalar((1 + RIM_COR) * dot)); 
                  let overlap = (BALL_RADIUS + TUBE_RADIUS) - distToRing;
                  nextPos.add(normal.clone().multiplyScalar(overlap + 0.005));
-                 hitRimTracker = true; // บันทึกว่ามีการชนขอบห่วง!
+                 hitRimTracker = true; 
                }
              }
           }
@@ -437,7 +440,7 @@ export default function App() {
               stateRef.current.hasTriggeredScore = true;
               let text = '🔥 SCORE!';
               if (!stateRef.current.hitRim && !stateRef.current.hitBackboard) {
-                  text = '💦 SWISH!'; // ลงแบบเนียนๆ ไม่แตะเหล็กและแป้น
+                  text = '💦 SWISH!'; 
               } else if (stateRef.current.hitBackboard) {
                   text = '💥 BANK SHOT!';
               }
@@ -480,7 +483,6 @@ export default function App() {
     };
   }, []);
 
-  // --- Auto Aim ที่แก้บั๊กและรองรับการแจ้งเตือนมุมตาย ---
   const calculateAutoAim = (mode: 'swish' | 'bank') => {
     const target = mode === 'bank' ? VIRTUAL_HOOP_CENTER : HOOP_CENTER;
     
@@ -501,7 +503,6 @@ export default function App() {
     const dirX = Math.sin(finalYawRad);
     const dirZ = Math.cos(finalYawRad);
 
-    // คำนวณระยะทางบนระนาบพื้น (dh) เพื่อเช็คความน่าจะเป็น
     let dh = 0;
     if (mode === 'swish') {
        dh = Math.sqrt(dxTarget * dxTarget + dzTarget * dzTarget);
@@ -515,7 +516,6 @@ export default function App() {
 
     const dy = HOOP_CENTER.y - startY;
     
-    // ตรวจสอบมุมยิงตายตัวที่ไม่มีทางถึงเป้า
     const minAngleDeg = Math.atan2(dy, dh) * 180 / Math.PI;
     if (angle <= minAngleDeg + 1) {
       alert(`❌ มุมการยิง ${angle}° ต่ำเกินไป! ไม่มีทางถึงห่วงได้จากระยะนี้\n(กรุณาปรับองศาขึ้นเป็น ${Math.ceil(minAngleDeg) + 5}° ขึ้นไปครับ)`);
@@ -525,7 +525,6 @@ export default function App() {
     const angleRad = angle * Math.PI / 180;
     let finalForce = force;
 
-    // สำหรับ Swish ใช้สูตรคณิตศาสตร์แบบ 100%
     if (mode === 'swish') {
        const tanTheta = Math.tan(angleRad);
        const cosTheta = Math.cos(angleRad);
@@ -533,7 +532,6 @@ export default function App() {
        const v0_sq = (0.5 * GRAVITY * dh * dh) / (cosTheta * cosTheta * denom);
        finalForce = (Math.sqrt(v0_sq) * BALL_MASS) / PUSH_TIME;
     } 
-    // สำหรับ Bank ใช้ Binary Search หาน้ำหนักที่ชดเชยแรงเสียดทานแป้นได้อย่างไร้ที่ติ
     else {
        let minF = 1;
        let maxF = 150;
@@ -573,10 +571,10 @@ export default function App() {
           }
 
           if (!reachedHeight) {
-              minF = testF; // ไม่ถึงห่วงบนอากาศ ต้องเพิ่มแรง
+              minF = testF; 
           } else {
-              if (exactDist < dh) minF = testF; // ทะลุห่วงเร็วไป (ตกไม่ถึง) ต้องเพิ่มแรง
-              else maxF = testF; // ทะลุห่วงช้าไป (พุ่งเกิน) ต้องลดแรง
+              if (exactDist < dh) minF = testF; 
+              else maxF = testF; 
           }
           finalForce = testF;
        }
@@ -621,12 +619,14 @@ export default function App() {
         }
       `}</style>
 
+      {/* ฉาก 3D */}
       <div 
         ref={containerRef} 
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
         className={interactionMode === 'shooter' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'} 
       />
 
+      {/* Score Popup */}
       {scorePopup.show && (
         <div key={scorePopup.id} className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
           <h2 className="animate-score text-7xl md:text-9xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-yellow-300 via-orange-500 to-red-600 uppercase">
@@ -635,7 +635,17 @@ export default function App() {
         </div>
       )}
 
-      <div className="ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-50 max-h-[calc(100vh-2rem)] overflow-y-auto">
+      {/* ปุ่มเปิด-ปิดหน้าต่างตั้งค่า (Toggle Button) */}
+      <button
+        onClick={() => setIsUIVisible(!isUIVisible)}
+        className="absolute top-4 right-4 z-[60] bg-gray-900/90 hover:bg-gray-700 backdrop-blur-md border border-gray-600 text-white rounded-full w-12 h-12 flex items-center justify-center shadow-2xl transition-all cursor-pointer text-xl"
+        title={isUIVisible ? "ซ่อนเมนู" : "ตั้งค่า"}
+      >
+        {isUIVisible ? '✖️' : '⚙️'}
+      </button>
+
+      {/* เมนูตั้งค่า (พร้อมแอนิเมชันเลื่อนเข้าออก) */}
+      <div className={`ui-overlay absolute top-4 left-4 bg-gray-900/85 backdrop-blur-md p-4 pb-8 rounded-2xl shadow-2xl border border-gray-700 w-[340px] text-white select-none z-50 max-h-[calc(100vh-2rem)] overflow-y-auto transition-all duration-300 ease-in-out ${isUIVisible ? 'translate-x-0 opacity-100' : '-translate-x-[120%] opacity-0 pointer-events-none'}`}>
         <h1 className="text-xl font-bold mb-3 text-blue-400">3D Hoops Sim</h1>
         
         <div className="flex bg-gray-800 p-1 rounded-lg mb-4 border border-gray-700">
