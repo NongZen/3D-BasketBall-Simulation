@@ -12,6 +12,8 @@ const BACKBOARD_COR_XY = 0.90;
 const RIM_COR = 0.6; 
 const FLOOR_COR = 0.65; 
 
+const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z) / BACKBOARD_COR_Z);
+
 const BALL_MASS = 0.624; 
 const PUSH_TIME = 0.2; 
 const BALL_RADIUS = 0.12;
@@ -45,7 +47,7 @@ export default function App() {
     ballT: 0, 
     trajectoryPoints: [] as THREE.Vector3[],
     hitBackboard: false,
-    hitRim: false, // Track rim collision
+    hitRim: false,
     scoreDetected: false,
     scorePointIndex: -1,
     hasTriggeredScore: false 
@@ -320,7 +322,7 @@ export default function App() {
                  vel.sub(normal.clone().multiplyScalar((1 + RIM_COR) * dot)); 
                  let overlap = (BALL_RADIUS + TUBE_RADIUS) - distToRing;
                  nextPos.add(normal.clone().multiplyScalar(overlap + 0.005));
-                 hitRimTracker = true; // บันทึกว่ามีการชนขอบห่วง
+                 hitRimTracker = true; // บันทึกว่ามีการชนขอบห่วง!
                }
              }
           }
@@ -388,17 +390,15 @@ export default function App() {
       shooter.scale.set(1, stateRef.current.startY, 1);
       shooter.position.set(stateRef.current.startX, stateRef.current.startY / 2, stateRef.current.startZ);
 
-      // จัดการอนิเมชันของตาข่ายบาส
+      // --- อนิเมชันตาข่ายบาสเกตบอล ---
       let ballDy = HOOP_CENTER.y - ball.position.y;
       let ballDist = Math.sqrt(Math.pow(ball.position.x - HOOP_CENTER.x, 2) + Math.pow(ball.position.z - HOOP_CENTER.z, 2));
       
-      if (ballDy > 0 && ballDy < 0.5 && ballDist < 0.22) {
-          // ลูกบาสกำลังผ่านตาข่าย ให้ตาข่ายยืดลง
-          let stretch = Math.sin((ballDy / 0.5) * Math.PI); 
-          netMesh.scale.y = 1.0 + stretch * 0.4;
-          netMesh.position.y = (HOOP_CENTER.y - 0.175) - (stretch * 0.07);
+      if (ballDy > 0 && ballDy < 0.6 && ballDist < 0.22) {
+          let stretch = Math.sin((ballDy / 0.6) * Math.PI); 
+          netMesh.scale.y = 1.0 + stretch * 0.5;
+          netMesh.position.y = (HOOP_CENTER.y - 0.175) - (stretch * 0.08);
       } else {
-          // เด้งกลับจุดเดิม
           netMesh.scale.y = THREE.MathUtils.lerp(netMesh.scale.y, 1.0, 0.15);
           netMesh.position.y = THREE.MathUtils.lerp(netMesh.position.y, HOOP_CENTER.y - 0.175, 0.15);
       }
@@ -427,7 +427,7 @@ export default function App() {
           setIsShooting(false);
         }
 
-        // โชว์คะแนนตอนทะลุห่วง
+        // โชว์คะแนนตอนทะลุห่วง (กฏ Clean Shot)
         const currY = ball.position.y;
         if (prevY > HOOP_CENTER.y && currY <= HOOP_CENTER.y) {
           let dx = ball.position.x - HOOP_CENTER.x;
@@ -437,7 +437,7 @@ export default function App() {
               stateRef.current.hasTriggeredScore = true;
               let text = '🔥 SCORE!';
               if (!stateRef.current.hitRim && !stateRef.current.hitBackboard) {
-                  text = '💦 SWISH!'; // ไม่แตะขอบเหล็ก ไม่แตะแป้น
+                  text = '💦 SWISH!'; // ลงแบบเนียนๆ ไม่แตะเหล็กและแป้น
               } else if (stateRef.current.hitBackboard) {
                   text = '💥 BANK SHOT!';
               }
@@ -480,9 +480,9 @@ export default function App() {
     };
   }, []);
 
-  // --- Auto Aim ด้วย AI Binary Search (แม่นยำ 100%) ---
-  const calculateAutoAim = (targetMode: 'swish' | 'bank') => {
-    const target = targetMode === 'bank' ? VIRTUAL_HOOP_CENTER : HOOP_CENTER;
+  // --- Auto Aim ที่แก้บั๊กและรองรับการแจ้งเตือนมุมตาย ---
+  const calculateAutoAim = (mode: 'swish' | 'bank') => {
+    const target = mode === 'bank' ? VIRTUAL_HOOP_CENTER : HOOP_CENTER;
     
     const dxHoop = HOOP_CENTER.x - startX;
     const dzHoop = HOOP_CENTER.z - startZ;
@@ -497,76 +497,93 @@ export default function App() {
     if (requiredYawOffset < -180) requiredYawOffset += 360;
     setYawAngle(parseFloat(requiredYawOffset.toFixed(2)));
 
-    // ตรวจสอบมุมยิงขั้นต่ำ (Impossible Angle Check)
-    const dh = Math.sqrt(dxTarget * dxTarget + dzTarget * dzTarget);
-    const dy = HOOP_CENTER.y - startY; 
-    const minAngleDeg = Math.atan2(dy, dh) * 180 / Math.PI;
+    const finalYawRad = baseYaw + (requiredYawOffset * Math.PI / 180);
+    const dirX = Math.sin(finalYawRad);
+    const dirZ = Math.cos(finalYawRad);
 
-    if (angle <= minAngleDeg + 1) { // เผื่อองศาไว้นิดหน่อยเพื่อให้ข้ามขอบเหล็กได้
-      alert(`❌ มุมการยิง ${angle}° ต่ำเกินไป! ไม่มีทางถึงห่วงได้\n(ต้องปรับองศาเป็น ${Math.ceil(minAngleDeg) + 5}° ขึ้นไป)`);
+    // คำนวณระยะทางบนระนาบพื้น (dh) เพื่อเช็คความน่าจะเป็น
+    let dh = 0;
+    if (mode === 'swish') {
+       dh = Math.sqrt(dxTarget * dxTarget + dzTarget * dzTarget);
+    } else {
+       let tToBoard = (BACKBOARD_Z - startZ) / dirZ;
+       let hitX = startX + tToBoard * dirX;
+       let dist1 = Math.sqrt(Math.pow(hitX - startX, 2) + Math.pow(BACKBOARD_Z - startZ, 2));
+       let dist2 = Math.sqrt(Math.pow(HOOP_CENTER.x - hitX, 2) + Math.pow(HOOP_CENTER.z - BACKBOARD_Z, 2));
+       dh = dist1 + dist2;
+    }
+
+    const dy = HOOP_CENTER.y - startY;
+    
+    // ตรวจสอบมุมยิงตายตัวที่ไม่มีทางถึงเป้า
+    const minAngleDeg = Math.atan2(dy, dh) * 180 / Math.PI;
+    if (angle <= minAngleDeg + 1) {
+      alert(`❌ มุมการยิง ${angle}° ต่ำเกินไป! ไม่มีทางถึงห่วงได้จากระยะนี้\n(กรุณาปรับองศาขึ้นเป็น ${Math.ceil(minAngleDeg) + 5}° ขึ้นไปครับ)`);
       return;
     }
 
-    // Binary Search หาน้ำหนักแรงที่เป๊ะที่สุดจากการจำลองฟิสิกส์จริง
-    let minF = 1;
-    let maxF = 150;
-    let bestF = force;
-    let angleRad = angle * Math.PI / 180;
-    const finalYawRad = baseYaw + (requiredYawOffset * Math.PI / 180);
-    let dirX = Math.sin(finalYawRad);
-    let dirZ = Math.cos(finalYawRad);
+    const angleRad = angle * Math.PI / 180;
+    let finalForce = force;
 
-    for (let i = 0; i < 40; i++) {
-        let testF = (minF + maxF) / 2;
-        let v0 = (testF * PUSH_TIME) / BALL_MASS;
-        let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
-        let pos = new THREE.Vector3(startX, startY, startZ);
-        let simDt = 0.01;
-        let resultScore = 0; 
-        
-        for (let step = 0; step < 300; step++) {
-            vel.y -= GRAVITY * simDt;
-            let nextPos = pos.clone().addScaledVector(vel, simDt);
+    // สำหรับ Swish ใช้สูตรคณิตศาสตร์แบบ 100%
+    if (mode === 'swish') {
+       const tanTheta = Math.tan(angleRad);
+       const cosTheta = Math.cos(angleRad);
+       const denom = dh * tanTheta - dy;
+       const v0_sq = (0.5 * GRAVITY * dh * dh) / (cosTheta * cosTheta * denom);
+       finalForce = (Math.sqrt(v0_sq) * BALL_MASS) / PUSH_TIME;
+    } 
+    // สำหรับ Bank ใช้ Binary Search หาน้ำหนักที่ชดเชยแรงเสียดทานแป้นได้อย่างไร้ที่ติ
+    else {
+       let minF = 1;
+       let maxF = 150;
+       for (let i = 0; i < 50; i++) {
+          let testF = (minF + maxF) / 2;
+          let v0 = (testF * PUSH_TIME) / BALL_MASS;
+          let vel = new THREE.Vector3(v0 * Math.cos(angleRad) * dirX, v0 * Math.sin(angleRad), v0 * Math.cos(angleRad) * dirZ);
+          let pos = new THREE.Vector3(startX, startY, startZ);
+          let simDt = 0.005;
 
-            // จำลองเฉพาะการชนแป้นเพื่อหาแรง Bank
-            if (targetMode === 'bank' && vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
-                 nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
-                 vel.z *= -BACKBOARD_COR_Z;
-                 vel.x *= BACKBOARD_COR_XY;
-                 vel.y *= BACKBOARD_COR_XY;
-            }
+          let traveledDist = 0;
+          let reachedHeight = false;
+          let exactDist = 0;
 
-            // ถ้าร่วงผ่านความสูงของห่วง
-            if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
-                let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
-                let crossZ = pos.z + (nextPos.z - pos.z) * fraction;
-                
-                if (targetMode === 'swish') {
-                    resultScore = crossZ - HOOP_CENTER.z; // ถ้าวิ่งไม่ถึงเป้า Z จะบวกเยอะ
-                } else {
-                    resultScore = HOOP_CENTER.z - crossZ; // ถ้าเด้งมาไม่ถึงเป้า Z จะติดลบเยอะ
-                }
-                break;
-            }
-            if (nextPos.y < 0) break;
-            pos.copy(nextPos);
-        }
+          for (let step = 0; step < 600; step++) {
+              vel.y -= GRAVITY * simDt;
+              let nextPos = pos.clone().addScaledVector(vel, simDt);
 
-        if (resultScore > 0) minF = testF; // ขว้างไม่ถึง ให้เพิ่มแรง
-        else maxF = testF; // ขว้างเลย ให้ลดแรง
-        bestF = testF;
+              if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
+                   nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
+                   vel.z *= -BACKBOARD_COR_Z;
+                   vel.x *= BACKBOARD_COR_XY;
+                   vel.y *= BACKBOARD_COR_XY;
+              }
+
+              let stepDist = Math.sqrt(Math.pow(nextPos.x - pos.x, 2) + Math.pow(nextPos.z - pos.z, 2));
+              traveledDist += stepDist;
+
+              if (vel.y < 0 && pos.y >= HOOP_CENTER.y && nextPos.y < HOOP_CENTER.y) {
+                  let fraction = (pos.y - HOOP_CENTER.y) / (pos.y - nextPos.y);
+                  exactDist = traveledDist - stepDist + (stepDist * fraction);
+                  reachedHeight = true;
+                  break;
+              }
+              if (nextPos.y < 0) break;
+              pos.copy(nextPos);
+          }
+
+          if (!reachedHeight) {
+              minF = testF; // ไม่ถึงห่วงบนอากาศ ต้องเพิ่มแรง
+          } else {
+              if (exactDist < dh) minF = testF; // ทะลุห่วงเร็วไป (ตกไม่ถึง) ต้องเพิ่มแรง
+              else maxF = testF; // ทะลุห่วงช้าไป (พุ่งเกิน) ต้องลดแรง
+          }
+          finalForce = testF;
+       }
     }
 
-    // ตรวจสอบว่ามุมตั้งไว้แบนเกินไปจนติดขอบห่วงหรือเปล่า (ถ้า entry angle ต่ำไป)
-    let v0 = (bestF * PUSH_TIME) / BALL_MASS;
-    let checkV_y = v0 * Math.sin(angleRad) - GRAVITY * (dh / (v0 * Math.cos(angleRad)));
-    let checkV_h = v0 * Math.cos(angleRad);
-    if (Math.abs(checkV_y) / checkV_h < 0.75) {
-       alert(`⚠️ มุมยิง ${angle}° ทำให้ลูกพุ่งเข้าห่วงในแนวราบเกินไป (ลูกจะกระแทกเหล็กและไม่ Swish 100%)\nแนะนำให้เพิ่มมุมยิงให้สูงขึ้น เพื่อวิถีโค้งที่สวยงาม!`);
-    }
-
-    setForce(parseFloat(bestF.toFixed(2)));
-    setAimMode(targetMode);
+    setForce(parseFloat(finalForce.toFixed(2)));
+    setAimMode(mode);
     setScrubPercent(0); 
   };
 
