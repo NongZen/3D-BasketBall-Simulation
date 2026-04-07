@@ -3,17 +3,22 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 // --- Physics & Court Constants ---
-const GRAVITY = 9.80665; // m/s^2
+const GRAVITY = 9.8; // m/s^2
 const BACKBOARD_Z = -13.3;
 const HOOP_CENTER = new THREE.Vector3(0, 3.05, -12.85); 
 
-// สำหรับ Auto-Aim Bank Shot เรากำหนดให้การสะท้อนแป้นสมบูรณ์ 100% เพื่อให้คณิตศาสตร์แก้สมการได้แม่นยำ
-const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z));
+// การสูญเสียพลังงานเมื่อกระทบ (Restitution) เพื่อความสมจริง
+const BACKBOARD_COR_Z = 0.75; 
+const BACKBOARD_COR_XY = 0.90; 
+const RIM_COR = 0.6; 
+
+// ปรับเป้าหมายจำลองให้ชดเชยกับการสูญเสียพลังงานของแป้นบาส
+const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z) / BACKBOARD_COR_Z);
 
 const BALL_MASS = 0.624; // kg
 const PUSH_TIME = 0.2; // seconds
 const BALL_RADIUS = 0.12;
-const TUBE_RADIUS = 0.01; // ความหนาของเหล็กห่วง
+const TUBE_RADIUS = 0.02; // ความหนาของเหล็กห่วง
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -27,20 +32,25 @@ export default function App() {
   const [angle, setAngle] = useState<number>(50);
   const [force, setForce] = useState<number>(35);
   
-  const [isDashed, setIsDashed] = useState<boolean>(true);
+  const [isDashed, setIsDashed] = useState<boolean>(true); 
   const [isShooting, setIsShooting] = useState<boolean>(false);
   const [aimMode, setAimMode] = useState<'swish' | 'bank' | 'manual'>('manual');
   const [interactionMode, setInteractionMode] = useState<'camera' | 'shooter'>('camera');
 
+  // --- New Time Control States ---
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
+  const [scrubPercent, setScrubPercent] = useState<number>(0);
+
   const stateRef = useRef({
     startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode,
+    playbackSpeed, scrubPercent,
     ballT: 0, 
     trajectoryPoints: [] as THREE.Vector3[],
   });
 
   useEffect(() => {
-    stateRef.current = { ...stateRef.current, startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode };
-  }, [startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode]);
+    stateRef.current = { ...stateRef.current, startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode, playbackSpeed, scrubPercent };
+  }, [startX, startZ, startY, yawAngle, angle, force, isDashed, isShooting, aimMode, interactionMode, playbackSpeed, scrubPercent]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -145,6 +155,17 @@ export default function App() {
     board.position.set(0, 3.55, BACKBOARD_Z);
     scene.add(board);
 
+    const innerBoxMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 4 });
+    const innerBoxGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-0.3, 3.05, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(0.3, 3.05, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(0.3, 3.5, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(-0.3, 3.5, BACKBOARD_Z + 0.03),
+      new THREE.Vector3(-0.3, 3.05, BACKBOARD_Z + 0.03),
+    ]);
+    const innerBox = new THREE.Line(innerBoxGeo, innerBoxMat);
+    scene.add(innerBox);
+
     const rimGeo = new THREE.TorusGeometry(0.22, TUBE_RADIUS, 16, 32);
     const rimMat = new THREE.MeshStandardMaterial({ color: 0xff4400, roughness: 0.5 });
     const rim = new THREE.Mesh(rimGeo, rimMat);
@@ -162,16 +183,12 @@ export default function App() {
     const ball = new THREE.Mesh(ballGeo, ballMat);
     scene.add(ball);
 
-    // --- Trajectory Line (อัปเกรดให้รองรับจุดจำนวนมาก) ---
-    const maxPoints = 2000;
-    const trajGeo = new THREE.BufferGeometry();
-    const positions = new Float32Array(maxPoints * 3);
-    trajGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    
-    const solidLineMat = new THREE.LineBasicMaterial({ color: 0x10b981, linewidth: 3 });
-    const dashedLineMat = new THREE.LineDashedMaterial({ color: 0x10b981, dashSize: 0.3, gapSize: 0.15 });
-    const trajectoryLine = new THREE.Line(trajGeo, dashedLineMat);
-    scene.add(trajectoryLine);
+    const maxInst = 300; 
+    const trajGeo = new THREE.SphereGeometry(BALL_RADIUS * 0.9, 16, 16);
+    const trajMat = new THREE.MeshBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.25 });
+    const trajMesh = new THREE.InstancedMesh(trajGeo, trajMat, maxInst);
+    scene.add(trajMesh);
+    const dummy = new THREE.Object3D(); 
 
     const markerGeo = new THREE.SphereGeometry(0.08, 16, 16);
     const markerMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
@@ -197,6 +214,7 @@ export default function App() {
         setStartX(parseFloat((Math.max(-7.5, Math.min(7.5, pt.x))).toFixed(2)));
         setStartZ(parseFloat((Math.max(-14, Math.min(0, pt.z))).toFixed(2)));
         setAimMode('manual');
+        setScrubPercent(0);
       }
     };
     window.addEventListener('pointerdown', onPointerDown);
@@ -209,7 +227,6 @@ export default function App() {
       return { dirX: Math.sin(finalYawRad), dirZ: Math.cos(finalYawRad) };
     };
 
-    // --- PHYSICS ENGINE: อัปเดตวิถีโค้งและการชนแบบทีละก้าว ---
     const updateTrajectoryPhysics = () => {
       const { angle, force, startX, startZ, startY, yawAngle, isDashed } = stateRef.current;
       
@@ -223,8 +240,8 @@ export default function App() {
         (v0 * Math.cos(angle * Math.PI / 180)) * dirZ
       );
       
-      const simDt = 0.005; // คำนวณความละเอียดสูง
-      const maxSteps = 2000;
+      const simDt = 0.005; 
+      const maxSteps = 2500;
       const generatedPoints = [pos.clone()];
       let hitMarker = false;
 
@@ -232,11 +249,12 @@ export default function App() {
         vel.y -= GRAVITY * simDt;
         let nextPos = pos.clone().addScaledVector(vel, simDt);
 
-        // 1. ชนแป้นบาส (Backboard)
         if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
           if (nextPos.x >= -0.9 && nextPos.x <= 0.9 && nextPos.y >= 3.025 && nextPos.y <= 4.075) {
-            nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z);
-            vel.z *= -1.0; // เด้ง 100% เพื่อให้ Auto-aim แม่นยำ
+            nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
+            vel.z *= -BACKBOARD_COR_Z;
+            vel.x *= BACKBOARD_COR_XY;
+            vel.y *= BACKBOARD_COR_XY;
             if (!hitMarker) {
               marker.position.set(nextPos.x, nextPos.y, BACKBOARD_Z + 0.03);
               hitMarker = true;
@@ -244,58 +262,59 @@ export default function App() {
           }
         }
 
-        // 2. ชนขอบห่วงเหล็ก (Rim Collision)
-        if (nextPos.y > 2.8 && nextPos.y < 3.3) {
+        if (Math.abs(nextPos.y - HOOP_CENTER.y) < BALL_RADIUS + TUBE_RADIUS) {
           let dx = nextPos.x - HOOP_CENTER.x;
           let dz = nextPos.z - HOOP_CENTER.z;
           let horizDist = Math.sqrt(dx*dx + dz*dz);
-          
-          if (horizDist > 0.001) {
-            // หาจุดที่ใกล้ที่สุดบนวงแหวนห่วง
-            let rx = HOOP_CENTER.x + (dx/horizDist) * 0.22;
-            let rz = HOOP_CENTER.z + (dz/horizDist) * 0.22;
-            let closestRingPoint = new THREE.Vector3(rx, HOOP_CENTER.y, rz);
-            
-            let dist = nextPos.distanceTo(closestRingPoint);
-            // ถ้าระยะห่างน้อยกว่า (รัศมีลูก + รัศมีท่อเหล็ก) แปลว่าชน!
-            if (dist < BALL_RADIUS + TUBE_RADIUS) {
-              let normal = new THREE.Vector3().subVectors(nextPos, closestRingPoint).normalize();
-              let dot = vel.dot(normal);
-              if (dot < 0) {
-                vel.sub(normal.multiplyScalar(1.6 * dot)); // 1.6 = Restitution(0.6) + 1
-                nextPos.copy(closestRingPoint).add(normal.multiplyScalar(BALL_RADIUS + TUBE_RADIUS + 0.001));
-              }
-            }
+
+          if (Math.abs(horizDist - 0.22) < BALL_RADIUS + TUBE_RADIUS) {
+             let closestRingPoint = new THREE.Vector3(
+               HOOP_CENTER.x + (dx/horizDist) * 0.22,
+               HOOP_CENTER.y,
+               HOOP_CENTER.z + (dz/horizDist) * 0.22
+             );
+             let distToRing = nextPos.distanceTo(closestRingPoint);
+             
+             if (distToRing < BALL_RADIUS + TUBE_RADIUS) {
+               let normal = new THREE.Vector3().subVectors(nextPos, closestRingPoint).normalize();
+               let dot = vel.dot(normal);
+               if (dot < 0) {
+                 vel.sub(normal.multiplyScalar((1 + RIM_COR) * dot)); 
+                 let overlap = (BALL_RADIUS + TUBE_RADIUS) - distToRing;
+                 nextPos.add(normal.multiplyScalar(overlap + 0.001));
+               }
+             }
           }
         }
 
-        // 3. กระทบพื้น (Floor) -> วาดให้จมพื้นพอดีแล้วหยุด
         if (nextPos.y <= BALL_RADIUS) {
           let fraction = (pos.y - BALL_RADIUS) / (pos.y - nextPos.y);
           nextPos.lerpVectors(pos, nextPos, fraction);
           pos.copy(nextPos);
-          if (i % 3 === 0 || i === maxSteps - 1) generatedPoints.push(pos.clone());
-          break; // หยุดลูปเมื่อถึงพื้น
+          generatedPoints.push(pos.clone());
+          break; 
         }
 
         pos.copy(nextPos);
-        // บันทึกจุดวาดเส้นประทุกๆ 3 steps (ประหยัด memory)
-        if (i % 3 === 0) generatedPoints.push(pos.clone());
+        if (i % 4 === 0) generatedPoints.push(pos.clone());
       }
 
       stateRef.current.trajectoryPoints = generatedPoints;
       marker.visible = hitMarker;
 
-      // อัปเดต BufferGeometry เส้นประ
-      for (let i = 0; i < generatedPoints.length && i < maxPoints; i++) {
-        positions[i * 3] = generatedPoints[i].x;
-        positions[i * 3 + 1] = generatedPoints[i].y;
-        positions[i * 3 + 2] = generatedPoints[i].z;
+      trajMesh.visible = isDashed;
+      if (isDashed) {
+        const stepSkip = Math.max(1, Math.floor(generatedPoints.length / maxInst)); 
+        const drawCount = Math.min(maxInst, Math.floor(generatedPoints.length / stepSkip));
+        
+        trajMesh.count = drawCount;
+        for (let i = 0; i < drawCount; i++) {
+           dummy.position.copy(generatedPoints[i * stepSkip]);
+           dummy.updateMatrix();
+           trajMesh.setMatrixAt(i, dummy.matrix);
+        }
+        trajMesh.instanceMatrix.needsUpdate = true;
       }
-      trajGeo.setDrawRange(0, generatedPoints.length);
-      trajGeo.attributes.position.needsUpdate = true;
-      trajectoryLine.material = isDashed ? dashedLineMat : solidLineMat;
-      if (isDashed) trajectoryLine.computeLineDistances();
     };
 
     let animationFrameId: number;
@@ -312,9 +331,11 @@ export default function App() {
       shooter.position.set(stateRef.current.startX, stateRef.current.startY / 2, stateRef.current.startZ);
 
       if (stateRef.current.isShooting) {
-        stateRef.current.ballT += dt * 1.5; // ความเร็วอนิเมชันตอนยิง
+        // นำค่า Playback Speed มาคูณกับระยะเวลาเพื่อเร่ง/ลดความเร็วอนิเมชัน
+        stateRef.current.ballT += dt * stateRef.current.playbackSpeed; 
+        
         const pts = stateRef.current.trajectoryPoints;
-        const simDt = 0.005 * 3; // เวลาต่อ 1 จุดที่บันทึกไว้ในอาร์เรย์ (0.015)
+        const simDt = 0.005 * 4; 
         
         if (pts.length > 0) {
           const indexExact = stateRef.current.ballT / simDt;
@@ -324,7 +345,6 @@ export default function App() {
             ball.position.copy(pts[pts.length - 1]);
             setIsShooting(false);
           } else {
-            // เลื่อนลูกบอลไปตามจุดที่จำลองไว้แล้วล่วงหน้า ทำให้ชนแป้น/ขอบห่วงเป๊ะตามเส้นประ!
             const p1 = pts[indexFloor];
             const p2 = pts[indexFloor + 1];
             const fraction = indexExact - indexFloor;
@@ -334,9 +354,17 @@ export default function App() {
           setIsShooting(false);
         }
       } else {
-        ball.position.set(stateRef.current.startX, stateRef.current.startY, stateRef.current.startZ);
-        stateRef.current.ballT = 0;
+        // กรณีไม่ได้กำลังกดยิง (ดูภาพนิ่ง หรือ เลื่อน Scrubber)
         updateTrajectoryPhysics();
+        const pts = stateRef.current.trajectoryPoints;
+        if (pts.length > 0) {
+          const maxIndex = pts.length - 1;
+          const targetIndex = Math.floor((stateRef.current.scrubPercent / 100) * maxIndex);
+          ball.position.copy(pts[targetIndex]); // อัปเดตตำแหน่งลูกบอลตาม% ของแถบเลื่อนเวลา
+        } else {
+          ball.position.set(stateRef.current.startX, stateRef.current.startY, stateRef.current.startZ);
+        }
+        stateRef.current.ballT = 0; // เคลียร์เวลาสำหรับตอนกดยิงจริงๆ
       }
 
       controls.update();
@@ -393,6 +421,18 @@ export default function App() {
     
     setForce(parseFloat(requiredForce.toFixed(2)));
     setAimMode(mode);
+    setScrubPercent(0); // รีเซ็ตสไลเดอร์เวลาเมื่อกด Auto-Aim
+  };
+
+  const handleScrubChange = (val: number) => {
+    if (isShooting) setIsShooting(false); // ยกเลิกอนิเมชันถ้าผู้ใช้ดึงสไลเดอร์เวลา
+    setScrubPercent(val);
+  };
+
+  const resetScrubber = () => {
+    setScrubPercent(0);
+    setIsShooting(false);
+    setAimMode('manual');
   };
 
   const distanceToHoop = Math.sqrt(Math.pow(startX - HOOP_CENTER.x, 2) + Math.pow(startZ - HOOP_CENTER.z, 2)).toFixed(2);
@@ -428,15 +468,15 @@ export default function App() {
 
             <div>
               <div className="flex justify-between mb-1"><label className="text-xs text-gray-300">ตำแหน่ง X</label><span className="text-xs text-blue-300">{startX}m</span></div>
-              <input type="range" min="-7.5" max="7.5" step="0.1" value={startX} onChange={(e) => { setStartX(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+              <input type="range" min="-7.5" max="7.5" step="0.1" value={startX} onChange={(e) => { setStartX(parseFloat(e.target.value)); resetScrubber(); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
             <div>
               <div className="flex justify-between mb-1"><label className="text-xs text-gray-300">ตำแหน่ง Z</label><span className="text-xs text-blue-300">{startZ}m</span></div>
-              <input type="range" min="-14" max="0" step="0.1" value={startZ} onChange={(e) => { setStartZ(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+              <input type="range" min="-14" max="0" step="0.1" value={startZ} onChange={(e) => { setStartZ(parseFloat(e.target.value)); resetScrubber(); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
             <div>
               <div className="flex justify-between mb-1"><label className="text-xs text-gray-300">ความสูงคนยิง (Height)</label><span className="text-xs text-blue-300">{startY}m</span></div>
-              <input type="range" min="0.5" max="3" step="0.1" value={startY} onChange={(e) => { setStartY(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+              <input type="range" min="0.5" max="3" step="0.1" value={startY} onChange={(e) => { setStartY(parseFloat(e.target.value)); resetScrubber(); }} className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
           </div>
 
@@ -447,21 +487,44 @@ export default function App() {
                 <label className="text-xs text-gray-300">องศาซ้าย-ขวา (Yaw)</label>
                 <span className="text-xs text-emerald-400">{yawAngle > 0 ? `ขวา ${yawAngle}°` : yawAngle < 0 ? `ซ้าย ${Math.abs(yawAngle)}°` : 'ตรง 0°'}</span>
               </div>
-              <input type="range" min="-60" max="60" step="0.1" value={yawAngle} onChange={(e) => { setYawAngle(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+              <input type="range" min="-60" max="60" step="0.1" value={yawAngle} onChange={(e) => { setYawAngle(parseFloat(e.target.value)); resetScrubber(); }} className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
             <div>
               <div className="flex justify-between mb-1"><label className="text-xs text-gray-300">องศาเงยยิง (Pitch)</label><span className="text-xs text-emerald-400">{angle}°</span></div>
-              <input type="range" min="10" max="85" step="1" value={angle} onChange={(e) => { setAngle(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+              <input type="range" min="10" max="85" step="1" value={angle} onChange={(e) => { setAngle(parseFloat(e.target.value)); resetScrubber(); }} className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
             <div>
               <div className="flex justify-between mb-1"><label className="text-xs text-gray-300">แรงยิง (Force)</label><span className="text-xs text-emerald-400">{force} N</span></div>
-              <input type="range" min="10" max="100" step="0.1" value={force} onChange={(e) => { setForce(parseFloat(e.target.value)); setAimMode('manual'); setIsShooting(false); }} className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+              <input type="range" min="10" max="100" step="0.1" value={force} onChange={(e) => { setForce(parseFloat(e.target.value)); resetScrubber(); }} className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+            </div>
+          </div>
+
+          {/* New Box: Time & Animation Control */}
+          <div className="space-y-2 bg-gray-800/50 p-3 rounded-lg border border-gray-700">
+            <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">⏱️ ควบคุมเวลา & อนิเมชัน</div>
+            
+            {/* สไลเดอร์ความเร็ว Playback */}
+            <div>
+              <div className="flex justify-between mb-1">
+                <label className="text-xs text-gray-300">ความเร็วการยิง (Speed)</label>
+                <span className="text-xs text-purple-400">{playbackSpeed.toFixed(1)}x</span>
+              </div>
+              <input type="range" min="0.1" max="3" step="0.1" value={playbackSpeed} onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))} className="w-full accent-purple-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
+            </div>
+
+            {/* สไลเดอร์เลื่อนเวลา */}
+            <div className="pt-1">
+              <div className="flex justify-between mb-1">
+                <label className="text-xs text-gray-300">เลื่อนดูเวลา (Scrub Time)</label>
+                <span className="text-xs text-orange-400">{scrubPercent}%</span>
+              </div>
+              <input type="range" min="0" max="100" step="1" value={scrubPercent} onChange={(e) => handleScrubChange(parseFloat(e.target.value))} className="w-full accent-orange-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
           </div>
 
           <div className="flex items-center space-x-2 px-1">
             <input type="checkbox" id="lineStyle" checked={isDashed} onChange={(e) => setIsDashed(e.target.checked)} className="w-4 h-4 accent-emerald-500 rounded cursor-pointer" />
-            <label htmlFor="lineStyle" className="text-sm text-gray-300 cursor-pointer">เส้นวิถีแบบประ</label>
+            <label htmlFor="lineStyle" className="text-sm text-gray-300 cursor-pointer">เปิดวิถีลูกบอลผี (Ghost Trail)</label>
           </div>
 
           <div className="space-y-2 pt-2">
@@ -471,7 +534,7 @@ export default function App() {
             <button onClick={() => calculateAutoAim(VIRTUAL_HOOP_CENTER, 'bank')} className="w-full py-2 px-4 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded-lg text-sm transition-colors flex justify-between items-center">
               <span>📐 Auto-Aim (ยิงชิ่งแป้น)</span>{aimMode === 'bank' && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
             </button>
-            <button onClick={() => setIsShooting(true)} disabled={isShooting} className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-gray-400 rounded-lg text-base font-bold shadow-lg transition-colors mt-2 mb-2">
+            <button onClick={() => { setIsShooting(true); setScrubPercent(0); }} disabled={isShooting} className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-gray-400 rounded-lg text-base font-bold shadow-lg transition-colors mt-2 mb-2">
               {isShooting ? 'กำลังยิง...' : '🏀 ยิง (SHOOT)'}
             </button>
           </div>
