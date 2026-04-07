@@ -58,27 +58,34 @@ export default function App() {
     scene.background = new THREE.Color(0x2a2a35); // Dark modern background
     scene.fog = new THREE.Fog(0x2a2a35, 20, 100);
 
-    const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 12, 15); // Adjusted to see the whole half-court
+    // ปรับมุมกล้องให้สูงและถอยออกมาเพื่อให้เห็นสนามกว้างขึ้น
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 15, 8); 
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     containerRef.current.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 0, -7); // Look at the center of the half-court
+    controls.target.set(0, 0, -7); // มองไปที่กลางสนาม
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
+    controls.update(); // บังคับอัปเดตมุมกล้องทันทีเพื่อให้มองเห็นเป้าหมาย
 
     // --- Lights ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
     dirLight.position.set(10, 20, 10);
     dirLight.castShadow = true;
+    
+    // ตั้งค่าแสงให้ส่องไปที่กลางสนามบาส
+    dirLight.target.position.set(0, 0, -7);
+    scene.add(dirLight.target);
+
     dirLight.shadow.camera.top = 20;
     dirLight.shadow.camera.bottom = -20;
     dirLight.shadow.camera.left = -20;
@@ -90,19 +97,27 @@ export default function App() {
     // --- Environment Objects ---
     // Floor (Half Court) - 15m wide, 14m deep
     const floorGeo = new THREE.PlaneGeometry(15, 14);
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0xc19a6b, roughness: 0.7 }); // Hardwood color
+    // ปรับสีพื้นไม้ให้ชัดเจนขึ้น
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0xdaaa70, roughness: 0.8, metalness: 0.1 }); 
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(0, 0, -7);
     floor.receiveShadow = true;
     scene.add(floor);
 
+    // เพิ่ม Grid เพื่อให้มองเห็นระนาบสนามได้ชัดเจนขึ้น
+    const gridHelper = new THREE.GridHelper(15, 15, 0x000000, 0x000000);
+    gridHelper.position.set(0, 0.005, -7);
+    gridHelper.material.opacity = 0.1;
+    gridHelper.material.transparent = true;
+    scene.add(gridHelper);
+
     // Court Markings Group
     const courtGroup = new THREE.Group();
     courtGroup.position.y = 0.01; // Slightly above floor to prevent z-fighting
     scene.add(courtGroup);
 
-    const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 3 });
 
     // Outer Boundary Lines
     const boundaryGeo = new THREE.BufferGeometry().setFromPoints([
@@ -117,10 +132,11 @@ export default function App() {
 
     // Paint area (Key)
     const paintGeo = new THREE.PlaneGeometry(4.9, 5.8);
-    const paintMat = new THREE.MeshBasicMaterial({ color: 0xbf4040 });
+    const paintMat = new THREE.MeshStandardMaterial({ color: 0x993333, roughness: 0.8 });
     const paint = new THREE.Mesh(paintGeo, paintMat);
     paint.rotation.x = -Math.PI / 2;
     paint.position.set(0, 0, BACKBOARD_Z + 5.8 / 2);
+    paint.receiveShadow = true;
     courtGroup.add(paint);
 
     // 3-Point Line (Arc)
@@ -140,7 +156,7 @@ export default function App() {
 
     // Hoop Pole
     const poleGeo = new THREE.CylinderGeometry(0.1, 0.1, 3.05);
-    const poleMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8, roughness: 0.2 });
     const pole = new THREE.Mesh(poleGeo, poleMat);
     pole.position.set(0, 3.05 / 2, -13.8);
     pole.castShadow = true;
@@ -149,11 +165,11 @@ export default function App() {
     // Backboard (Glass)
     const boardGeo = new THREE.BoxGeometry(1.8, 1.05, 0.05);
     const boardMat = new THREE.MeshStandardMaterial({ 
-      color: 0xddddff, 
+      color: 0xeef2ff, 
       transparent: true, 
-      opacity: 0.5,
+      opacity: 0.75,
       roughness: 0.1,
-      metalness: 0.2
+      metalness: 0.3
     });
     const board = new THREE.Mesh(boardGeo, boardMat);
     board.position.set(0, 3.55, BACKBOARD_Z);
@@ -190,7 +206,7 @@ export default function App() {
 
     // Rim
     const rimGeo = new THREE.TorusGeometry(0.22, 0.02, 16, 32);
-    const rimMat = new THREE.MeshStandardMaterial({ color: 0xff4400 });
+    const rimMat = new THREE.MeshStandardMaterial({ color: 0xff4400, roughness: 0.5 });
     const rim = new THREE.Mesh(rimGeo, rimMat);
     rim.rotation.x = -Math.PI / 2;
     rim.position.copy(HOOP_CENTER);
@@ -207,7 +223,7 @@ export default function App() {
     // --- Dynamic Objects ---
     // Ball
     const ballGeo = new THREE.SphereGeometry(0.12, 32, 32);
-    const ballMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 });
+    const ballMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.6 });
     const ball = new THREE.Mesh(ballGeo, ballMat);
     ball.castShadow = true;
     scene.add(ball);
@@ -218,7 +234,7 @@ export default function App() {
     const positions = new Float32Array(maxPoints * 3);
     trajGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     
-    const solidLineMat = new THREE.LineBasicMaterial({ color: 0x10b981, linewidth: 2 });
+    const solidLineMat = new THREE.LineBasicMaterial({ color: 0x10b981, linewidth: 3 });
     const dashedLineMat = new THREE.LineDashedMaterial({ color: 0x10b981, dashSize: 0.3, gapSize: 0.15 });
     
     const trajectoryLine = new THREE.Line(trajGeo, dashedLineMat);
