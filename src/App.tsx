@@ -7,12 +7,13 @@ const GRAVITY = 9.8; // m/s^2
 const BACKBOARD_Z = -13.3;
 const HOOP_CENTER = new THREE.Vector3(0, 3.05, -12.85); 
 
-// การสูญเสียพลังงานเมื่อกระทบ (Restitution) เพื่อความสมจริง
+// การสูญเสียพลังงานเมื่อกระทบ (Restitution)
 const BACKBOARD_COR_Z = 0.75; 
 const BACKBOARD_COR_XY = 0.90; 
-const RIM_COR = 0.6; 
+const RIM_COR = 0.6; // เหล็กห่วงเด้ง 60%
+const FLOOR_COR = 0.65; // พื้นกระดอน 65%
 
-// ปรับเป้าหมายจำลองให้ชดเชยกับการสูญเสียพลังงานของแป้นบาส
+// ปรับเป้าหมายจำลองให้ชดเชยกับการสูญเสียพลังงานของแป้นบาส (สำหรับ Auto-Aim)
 const VIRTUAL_HOOP_CENTER = new THREE.Vector3(0, 3.05, BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z) / BACKBOARD_COR_Z);
 
 const BALL_MASS = 0.624; // kg
@@ -37,7 +38,6 @@ export default function App() {
   const [aimMode, setAimMode] = useState<'swish' | 'bank' | 'manual'>('manual');
   const [interactionMode, setInteractionMode] = useState<'camera' | 'shooter'>('camera');
 
-  // --- New Time Control States ---
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [scrubPercent, setScrubPercent] = useState<number>(0);
 
@@ -183,8 +183,9 @@ export default function App() {
     const ball = new THREE.Mesh(ballGeo, ballMat);
     scene.add(ball);
 
-    const maxInst = 300; 
-    const trajGeo = new THREE.SphereGeometry(BALL_RADIUS * 0.9, 16, 16);
+    // --- Trajectory "Ghost Ball Trail" ---
+    const maxInst = 500; // เพิ่มจำนวนลูกผีเผื่อจังหวะเด้งพื้นหลายรอบ
+    const trajGeo = new THREE.SphereGeometry(BALL_RADIUS * 0.7, 16, 16); // ย่อขนาดลูกผีลงนิดนึงจะได้ดูทางง่าย
     const trajMat = new THREE.MeshBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.25 });
     const trajMesh = new THREE.InstancedMesh(trajGeo, trajMat, maxInst);
     scene.add(trajMesh);
@@ -227,6 +228,7 @@ export default function App() {
       return { dirX: Math.sin(finalYawRad), dirZ: Math.cos(finalYawRad) };
     };
 
+    // --- PHYSICS ENGINE: แก้บักการชนทั้งหมด และทำเด้งพื้น ---
     const updateTrajectoryPhysics = () => {
       const { angle, force, startX, startZ, startY, yawAngle, isDashed } = stateRef.current;
       
@@ -241,7 +243,7 @@ export default function App() {
       );
       
       const simDt = 0.005; 
-      const maxSteps = 2500;
+      const maxSteps = 4000; // เผื่อการกระดอนพื้นหลายตลบ
       const generatedPoints = [pos.clone()];
       let hitMarker = false;
 
@@ -249,6 +251,7 @@ export default function App() {
         vel.y -= GRAVITY * simDt;
         let nextPos = pos.clone().addScaledVector(vel, simDt);
 
+        // 1. ชนแป้นบาส
         if (vel.z < 0 && pos.z > BACKBOARD_Z && nextPos.z <= BACKBOARD_Z) {
           if (nextPos.x >= -0.9 && nextPos.x <= 0.9 && nextPos.y >= 3.025 && nextPos.y <= 4.075) {
             nextPos.z = BACKBOARD_Z + (BACKBOARD_Z - nextPos.z) * BACKBOARD_COR_Z;
@@ -262,11 +265,13 @@ export default function App() {
           }
         }
 
+        // 2. ชนขอบห่วงเหล็ก (แก้ไขบัก Vector แบบถาวร)
         if (Math.abs(nextPos.y - HOOP_CENTER.y) < BALL_RADIUS + TUBE_RADIUS) {
           let dx = nextPos.x - HOOP_CENTER.x;
           let dz = nextPos.z - HOOP_CENTER.z;
           let horizDist = Math.sqrt(dx*dx + dz*dz);
 
+          // เช็คว่าอยู่บริเวณเส้นรอบวงของเหล็กหรือไม่
           if (Math.abs(horizDist - 0.22) < BALL_RADIUS + TUBE_RADIUS) {
              let closestRingPoint = new THREE.Vector3(
                HOOP_CENTER.x + (dx/horizDist) * 0.22,
@@ -275,27 +280,43 @@ export default function App() {
              );
              let distToRing = nextPos.distanceTo(closestRingPoint);
              
-             if (distToRing < BALL_RADIUS + TUBE_RADIUS) {
+             // แก้ไขบั๊ก NaN/Infinity โดยการเช็ค distToRing > 0 
+             // และใช้ .clone() เพื่อป้องกัน Vector โดนแก้ไขทับกัน (Mutation Bug)
+             if (distToRing > 0.0001 && distToRing < BALL_RADIUS + TUBE_RADIUS) {
                let normal = new THREE.Vector3().subVectors(nextPos, closestRingPoint).normalize();
                let dot = vel.dot(normal);
-               if (dot < 0) {
-                 vel.sub(normal.multiplyScalar((1 + RIM_COR) * dot)); 
+               
+               if (dot < 0) { // ถ้ากำลังพุ่งเข้าชน
+                 // หักล้างความเร็วในทิศพุ่งชนด้วย .clone()
+                 vel.sub(normal.clone().multiplyScalar((1 + RIM_COR) * dot)); 
+                 
+                 // ผลักลูกบาสออกจากเหล็กทันทีเพื่อกันลูกติดบั๊กจมอยู่ในเหล็ก
                  let overlap = (BALL_RADIUS + TUBE_RADIUS) - distToRing;
-                 nextPos.add(normal.multiplyScalar(overlap + 0.001));
+                 nextPos.add(normal.clone().multiplyScalar(overlap + 0.005));
                }
              }
           }
         }
 
+        // 3. กระทบพื้น (เพิ่มการกระดอนพื้นแบบสมจริง)
         if (nextPos.y <= BALL_RADIUS) {
-          let fraction = (pos.y - BALL_RADIUS) / (pos.y - nextPos.y);
-          nextPos.lerpVectors(pos, nextPos, fraction);
-          pos.copy(nextPos);
-          generatedPoints.push(pos.clone());
-          break; 
+          if (vel.y < 0) { // ถ้าลูกกำลังร่วง
+            nextPos.y = BALL_RADIUS; // ล็อกให้อยู่บนพื้น
+            vel.y = Math.abs(vel.y) * FLOOR_COR; // กระดอนขึ้นตามค่า Restitution
+            vel.x *= 0.8; // แรงเสียดทานพื้นทำลายความเร็วแนวราบ
+            vel.z *= 0.8;
+            
+            // ถ้าระดับการกระดอนต่ำมากแล้ว (หยุดเด้ง) ให้หยุดคำนวณ
+            if (vel.y < 0.3) {
+                pos.copy(nextPos);
+                generatedPoints.push(pos.clone());
+                break; 
+            }
+          }
         }
 
         pos.copy(nextPos);
+        // บันทึกตำแหน่งทุกๆ 4 steps เพื่อใช้วาด Ghost Trail ประหยัดเครื่อง
         if (i % 4 === 0) generatedPoints.push(pos.clone());
       }
 
@@ -331,7 +352,6 @@ export default function App() {
       shooter.position.set(stateRef.current.startX, stateRef.current.startY / 2, stateRef.current.startZ);
 
       if (stateRef.current.isShooting) {
-        // นำค่า Playback Speed มาคูณกับระยะเวลาเพื่อเร่ง/ลดความเร็วอนิเมชัน
         stateRef.current.ballT += dt * stateRef.current.playbackSpeed; 
         
         const pts = stateRef.current.trajectoryPoints;
@@ -354,17 +374,16 @@ export default function App() {
           setIsShooting(false);
         }
       } else {
-        // กรณีไม่ได้กำลังกดยิง (ดูภาพนิ่ง หรือ เลื่อน Scrubber)
         updateTrajectoryPhysics();
         const pts = stateRef.current.trajectoryPoints;
         if (pts.length > 0) {
           const maxIndex = pts.length - 1;
           const targetIndex = Math.floor((stateRef.current.scrubPercent / 100) * maxIndex);
-          ball.position.copy(pts[targetIndex]); // อัปเดตตำแหน่งลูกบอลตาม% ของแถบเลื่อนเวลา
+          ball.position.copy(pts[targetIndex]); 
         } else {
           ball.position.set(stateRef.current.startX, stateRef.current.startY, stateRef.current.startZ);
         }
-        stateRef.current.ballT = 0; // เคลียร์เวลาสำหรับตอนกดยิงจริงๆ
+        stateRef.current.ballT = 0; 
       }
 
       controls.update();
@@ -421,11 +440,11 @@ export default function App() {
     
     setForce(parseFloat(requiredForce.toFixed(2)));
     setAimMode(mode);
-    setScrubPercent(0); // รีเซ็ตสไลเดอร์เวลาเมื่อกด Auto-Aim
+    setScrubPercent(0); 
   };
 
   const handleScrubChange = (val: number) => {
-    if (isShooting) setIsShooting(false); // ยกเลิกอนิเมชันถ้าผู้ใช้ดึงสไลเดอร์เวลา
+    if (isShooting) setIsShooting(false); 
     setScrubPercent(val);
   };
 
@@ -499,11 +518,8 @@ export default function App() {
             </div>
           </div>
 
-          {/* New Box: Time & Animation Control */}
           <div className="space-y-2 bg-gray-800/50 p-3 rounded-lg border border-gray-700">
             <div className="text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-2">⏱️ ควบคุมเวลา & อนิเมชัน</div>
-            
-            {/* สไลเดอร์ความเร็ว Playback */}
             <div>
               <div className="flex justify-between mb-1">
                 <label className="text-xs text-gray-300">ความเร็วการยิง (Speed)</label>
@@ -511,8 +527,6 @@ export default function App() {
               </div>
               <input type="range" min="0.1" max="3" step="0.1" value={playbackSpeed} onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))} className="w-full accent-purple-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer" />
             </div>
-
-            {/* สไลเดอร์เลื่อนเวลา */}
             <div className="pt-1">
               <div className="flex justify-between mb-1">
                 <label className="text-xs text-gray-300">เลื่อนดูเวลา (Scrub Time)</label>
