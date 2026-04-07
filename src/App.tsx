@@ -14,17 +14,21 @@ const VIRTUAL_HOOP_CENTER = new THREE.Vector3(
   BACKBOARD_Z - (HOOP_CENTER.z - BACKBOARD_Z)
 );
 
+const BALL_MASS = 0.624; // kg
+const PUSH_TIME = 0.2; // seconds
+
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   
   // --- UI & Simulation State ---
   const [angle, setAngle] = useState<number>(50);
-  const [force, setForce] = useState<number>(11);
+  const [force, setForce] = useState<number>(35); // Newtons
   const [startX, setStartX] = useState<number>(0);
-  const [startZ, setStartZ] = useState<number>(5);
+  const [startZ, setStartZ] = useState<number>(-2);
   const [isDashed, setIsDashed] = useState<boolean>(true);
   const [isShooting, setIsShooting] = useState<boolean>(false);
   const [aimMode, setAimMode] = useState<'swish' | 'bank'>('swish');
+  const [interactionMode, setInteractionMode] = useState<'camera' | 'shooter'>('camera');
 
   // Mutable state ref for the animation loop to avoid dependency issues
   const stateRef = useRef({
@@ -35,6 +39,7 @@ export default function App() {
     isDashed,
     isShooting,
     aimMode,
+    interactionMode,
     ballT: 0,
     hitBackboard: false,
     tHit: -1,
@@ -42,8 +47,8 @@ export default function App() {
 
   // Sync React state to mutable ref
   useEffect(() => {
-    stateRef.current = { ...stateRef.current, angle, force, startX, startZ, isDashed, isShooting, aimMode };
-  }, [angle, force, startX, startZ, isDashed, isShooting, aimMode]);
+    stateRef.current = { ...stateRef.current, angle, force, startX, startZ, isDashed, isShooting, aimMode, interactionMode };
+  }, [angle, force, startX, startZ, isDashed, isShooting, aimMode, interactionMode]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -51,24 +56,24 @@ export default function App() {
     // --- Scene Setup ---
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x2a2a35); // Dark modern background
-    scene.fog = new THREE.Fog(0x2a2a35, 30, 150);
+    scene.fog = new THREE.Fog(0x2a2a35, 20, 100);
 
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(15, 10, 15); // Isometric-style view
+    camera.position.set(0, 12, 15); // Adjusted to see the whole half-court
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowMap; // Fixed deprecated warning
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     containerRef.current.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 2, -5);
+    controls.target.set(0, 0, -7); // Look at the center of the half-court
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
 
     // --- Lights ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
     scene.add(ambientLight);
 
     const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -83,26 +88,32 @@ export default function App() {
     scene.add(dirLight);
 
     // --- Environment Objects ---
-    // Floor (Half Court)
-    const floorGeo = new THREE.PlaneGeometry(60, 60);
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0xdbab71, roughness: 0.8 });
+    // Floor (Half Court) - 15m wide, 14m deep
+    const floorGeo = new THREE.PlaneGeometry(15, 14);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0xc19a6b, roughness: 0.7 }); // Hardwood color
     const floor = new THREE.Mesh(floorGeo, floorMat);
     floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, 0, -7);
     floor.receiveShadow = true;
     scene.add(floor);
-
-    // Grid Helper for better spatial awareness
-    const gridHelper = new THREE.GridHelper(60, 60, 0x000000, 0x000000);
-    gridHelper.material.opacity = 0.1;
-    gridHelper.material.transparent = true;
-    scene.add(gridHelper);
 
     // Court Markings Group
     const courtGroup = new THREE.Group();
     courtGroup.position.y = 0.01; // Slightly above floor to prevent z-fighting
     scene.add(courtGroup);
 
-    const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+
+    // Outer Boundary Lines
+    const boundaryGeo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-7.5, 0, 0),
+      new THREE.Vector3(7.5, 0, 0),
+      new THREE.Vector3(7.5, 0, -14),
+      new THREE.Vector3(-7.5, 0, -14),
+      new THREE.Vector3(-7.5, 0, 0),
+    ]);
+    const boundaryLine = new THREE.Line(boundaryGeo, lineMat);
+    courtGroup.add(boundaryLine);
 
     // Paint area (Key)
     const paintGeo = new THREE.PlaneGeometry(4.9, 5.8);
@@ -113,16 +124,16 @@ export default function App() {
     courtGroup.add(paint);
 
     // 3-Point Line (Arc)
-    // thetaStart = Math.PI, thetaLength = Math.PI creates the arc facing the court (+Z)
-    const threePtGeo = new THREE.RingGeometry(6.75, 6.9, 64, 1, Math.PI, Math.PI);
-    const threePt = new THREE.Mesh(threePtGeo, lineMat);
+    const threePtGeo = new THREE.RingGeometry(6.75, 6.85, 64, 1, Math.PI, Math.PI);
+    const threePtMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const threePt = new THREE.Mesh(threePtGeo, threePtMat);
     threePt.rotation.x = -Math.PI / 2;
     threePt.position.set(0, 0, HOOP_CENTER.z);
     courtGroup.add(threePt);
 
     // Free throw circle
-    const ftCircleGeo = new THREE.RingGeometry(1.75, 1.9, 32);
-    const ftCircle = new THREE.Mesh(ftCircleGeo, lineMat);
+    const ftCircleGeo = new THREE.RingGeometry(1.75, 1.85, 32);
+    const ftCircle = new THREE.Mesh(ftCircleGeo, threePtMat);
     ftCircle.rotation.x = -Math.PI / 2;
     ftCircle.position.set(0, 0, BACKBOARD_Z + 5.8);
     courtGroup.add(ftCircle);
@@ -135,25 +146,47 @@ export default function App() {
     pole.castShadow = true;
     scene.add(pole);
 
-    // Backboard
+    // Backboard (Glass)
     const boardGeo = new THREE.BoxGeometry(1.8, 1.05, 0.05);
     const boardMat = new THREE.MeshStandardMaterial({ 
-      color: 0xffffff, 
+      color: 0xddddff, 
       transparent: true, 
-      opacity: 0.9,
-      roughness: 0.2
+      opacity: 0.5,
+      roughness: 0.1,
+      metalness: 0.2
     });
     const board = new THREE.Mesh(boardGeo, boardMat);
     board.position.set(0, 3.55, BACKBOARD_Z);
     board.castShadow = true;
     scene.add(board);
 
+    // Backboard Border (White)
+    const borderGeo = new THREE.BoxGeometry(1.9, 1.15, 0.03);
+    const borderMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const border = new THREE.Mesh(borderGeo, borderMat);
+    border.position.set(0, 3.55, BACKBOARD_Z - 0.01);
+    scene.add(border);
+
     // Backboard inner square
     const innerBoardGeo = new THREE.PlaneGeometry(0.6, 0.45);
-    const innerBoardMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-    const innerBoard = new THREE.Mesh(innerBoardGeo, innerBoardMat);
-    innerBoard.position.set(0, 3.3, BACKBOARD_Z + 0.026);
-    scene.add(innerBoard);
+    const innerBoardMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    
+    // Create a frame for the inner board instead of a solid block
+    const innerBoardTop = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.05), innerBoardMat);
+    innerBoardTop.position.set(0, 3.525, BACKBOARD_Z + 0.026);
+    scene.add(innerBoardTop);
+    
+    const innerBoardBottom = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 0.05), innerBoardMat);
+    innerBoardBottom.position.set(0, 3.075, BACKBOARD_Z + 0.026);
+    scene.add(innerBoardBottom);
+
+    const innerBoardLeft = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.45), innerBoardMat);
+    innerBoardLeft.position.set(-0.275, 3.3, BACKBOARD_Z + 0.026);
+    scene.add(innerBoardLeft);
+
+    const innerBoardRight = new THREE.Mesh(new THREE.PlaneGeometry(0.05, 0.45), innerBoardMat);
+    innerBoardRight.position.set(0.275, 3.3, BACKBOARD_Z + 0.026);
+    scene.add(innerBoardRight);
 
     // Rim
     const rimGeo = new THREE.TorusGeometry(0.22, 0.02, 16, 32);
@@ -203,6 +236,7 @@ export default function App() {
     const mouse = new THREE.Vector2();
 
     const onPointerDown = (event: PointerEvent) => {
+      if (stateRef.current.interactionMode !== 'shooter') return;
       // Prevent clicking through the UI overlay
       if ((event.target as HTMLElement).closest('.ui-overlay')) return;
       if (stateRef.current.isShooting) return;
@@ -216,8 +250,8 @@ export default function App() {
       if (intersects.length > 0) {
         const pt = intersects[0].point;
         // Clamp to court boundaries
-        const newX = Math.max(-14, Math.min(14, pt.x));
-        const newZ = Math.max(-14, Math.min(14, pt.z));
+        const newX = Math.max(-7.5, Math.min(7.5, pt.x));
+        const newZ = Math.max(-14, Math.min(0, pt.z));
         setStartX(parseFloat(newX.toFixed(2)));
         setStartZ(parseFloat(newZ.toFixed(2)));
       }
@@ -241,8 +275,12 @@ export default function App() {
       const dirZ = dz / horizontalDist;
 
       const angleRad = angle * Math.PI / 180;
-      const v0_y = force * Math.sin(angleRad);
-      const v0_h = force * Math.cos(angleRad);
+      
+      // Physics: v0 = (Force * PUSH_TIME) / BALL_MASS
+      const v0 = (force * PUSH_TIME) / BALL_MASS;
+      
+      const v0_y = v0 * Math.sin(angleRad);
+      const v0_h = v0 * Math.cos(angleRad);
       const v0_x = v0_h * dirX;
       const v0_z = v0_h * dirZ;
       
@@ -269,7 +307,7 @@ export default function App() {
           if (Math.abs(xInt) <= 0.9 && Math.abs(yInt - 3.55) <= 0.525) {
             hitBackboard = true;
             tHit = tInt;
-            marker.position.set(xInt, yInt, BACKBOARD_Z);
+            marker.position.set(xInt, yInt, BACKBOARD_Z + 0.03); // Slightly in front of backboard
           }
         }
         
@@ -297,10 +335,13 @@ export default function App() {
     const animate = (time: number) => {
       animationFrameId = requestAnimationFrame(animate);
       
-      // Custom delta time calculation to replace deprecated THREE.Clock
+      // Custom delta time calculation
       if (lastTime === 0) lastTime = time;
       const dt = (time - lastTime) / 1000;
       lastTime = time;
+
+      // Update controls state
+      controls.enabled = stateRef.current.interactionMode === 'camera';
 
       // Update shooter position
       shooter.position.set(stateRef.current.startX, START_Y / 2, stateRef.current.startZ);
@@ -320,8 +361,12 @@ export default function App() {
         const dirZ = dz / horizontalDist;
 
         const angleRad = angle * Math.PI / 180;
-        const v0_y = force * Math.sin(angleRad);
-        const v0_h = force * Math.cos(angleRad);
+        
+        // Physics: v0 = (Force * PUSH_TIME) / BALL_MASS
+        const v0 = (force * PUSH_TIME) / BALL_MASS;
+        
+        const v0_y = v0 * Math.sin(angleRad);
+        const v0_h = v0 * Math.cos(angleRad);
         const v0_x = v0_h * dirX;
         const v0_z = v0_h * dirZ;
         
@@ -395,7 +440,11 @@ export default function App() {
     }
     
     const v0_sq = (0.5 * GRAVITY * dh * dh) / (cosTheta * cosTheta * denom);
-    const requiredForce = Math.sqrt(v0_sq);
+    const requiredV0 = Math.sqrt(v0_sq);
+    
+    // Convert required v0 back to Force (Newtons)
+    // Force = (v0 * BALL_MASS) / PUSH_TIME
+    const requiredForce = (requiredV0 * BALL_MASS) / PUSH_TIME;
     
     setForce(parseFloat(requiredForce.toFixed(2)));
     setAimMode(mode);
@@ -404,12 +453,34 @@ export default function App() {
   return (
     <div className="relative w-full h-screen overflow-hidden bg-gray-900 font-sans">
       {/* 3D Canvas Container */}
-      <div ref={containerRef} className="absolute inset-0 cursor-crosshair" />
+      <div 
+        ref={containerRef} 
+        className={`absolute inset-0 ${interactionMode === 'shooter' ? 'cursor-crosshair' : 'cursor-grab active:cursor-grabbing'}`} 
+      />
 
       {/* UI Overlay */}
       <div className="ui-overlay absolute top-6 left-6 bg-gray-900/85 backdrop-blur-md p-6 rounded-2xl shadow-2xl border border-gray-700 w-80 text-white select-none">
         <h1 className="text-2xl font-bold mb-2 text-blue-400">3D Hoops Sim</h1>
-        <p className="text-xs text-gray-400 mb-6">Click anywhere on the court to move the shooter.</p>
+        
+        {/* Interaction Mode Toggle */}
+        <div className="flex bg-gray-800 p-1 rounded-lg mb-6 border border-gray-700">
+          <button
+            onClick={() => setInteractionMode('camera')}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              interactionMode === 'camera' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            🎥 Camera Mode
+          </button>
+          <button
+            onClick={() => setInteractionMode('shooter')}
+            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+              interactionMode === 'shooter' ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            🏃 Move Shooter
+          </button>
+        </div>
         
         <div className="space-y-5">
           {/* Position Sliders */}
@@ -420,7 +491,7 @@ export default function App() {
                 <span className="text-xs font-mono text-blue-300">{startX}m</span>
               </div>
               <input 
-                type="range" min="-14" max="14" step="0.1" 
+                type="range" min="-7.5" max="7.5" step="0.1" 
                 value={startX} 
                 onChange={(e) => { setStartX(parseFloat(e.target.value)); setIsShooting(false); }}
                 className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -432,7 +503,7 @@ export default function App() {
                 <span className="text-xs font-mono text-blue-300">{startZ}m</span>
               </div>
               <input 
-                type="range" min="-10" max="14" step="0.1" 
+                type="range" min="-14" max="0" step="0.1" 
                 value={startZ} 
                 onChange={(e) => { setStartZ(parseFloat(e.target.value)); setIsShooting(false); }}
                 className="w-full accent-blue-500 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -458,10 +529,10 @@ export default function App() {
           <div>
             <div className="flex justify-between mb-2">
               <label className="text-sm font-medium text-gray-300">Shooting Force</label>
-              <span className="text-sm font-mono text-emerald-400">{force} m/s (Newton)</span>
+              <span className="text-sm font-mono text-emerald-400">{force} N</span>
             </div>
             <input 
-              type="range" min="5" max="30" step="0.1" 
+              type="range" min="10" max="100" step="0.1" 
               value={force} 
               onChange={(e) => { setForce(parseFloat(e.target.value)); setIsShooting(false); }}
               className="w-full accent-emerald-500 h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
@@ -513,4 +584,3 @@ export default function App() {
     </div>
   );
 }
-
