@@ -23,7 +23,7 @@ export default function App() {
   
   // --- UI & Simulation State ---
   const [startX, setStartX] = useState<number>(0);
-  const [startZ, setStartZ] = useState<number>(-2);
+  const [startZ, setStartZ] = useState<number>(-5.6);
   const [startY, setStartY] = useState<number>(1.5);
   
   const [yawAngle, setYawAngle] = useState<number>(0);
