@@ -28,7 +28,7 @@ export default function App() {
   
   const [yawAngle, setYawAngle] = useState<number>(0);
   const [angle, setAngle] = useState<number>(55);
-  const [force, setForce] = useState<number>(35);
+  const [force, setForce] = useState<number>(29.5);
   
   const [isDashed, setIsDashed] = useState<boolean>(true); 
   const [isShooting, setIsShooting] = useState<boolean>(false);
